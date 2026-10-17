@@ -1,69 +1,97 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState, useEffect } from 'react';
+import { CheckCircle2 } from 'lucide-react';
+import type { Post, SocialProfile } from '@/lib/types';
+
+export default function Dashboard() {
+  const [profiles, setProfiles] = useState<SocialProfile[]>([]);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let ignore = false;
+
+    Promise.all([fetch('/api/profiles'), fetch('/api/posts')])
+      .then(async ([profRes, postsRes]) => {
+        if (ignore) return;
+        if (profRes.ok) {
+          const data = await profRes.json();
+          setProfiles(data.profiles || []);
+        }
+        if (postsRes.ok) {
+          const data = await postsRes.json();
+          setPosts(data.posts || []);
+        }
+      })
+      .catch((e) => console.error(e))
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [refreshKey]);
+
+  useEffect(() => {
+    const refresh = () => setRefreshKey((k) => k + 1);
+    window.addEventListener('posts-updated', refresh);
+    return () => window.removeEventListener('posts-updated', refresh);
+  }, []);
+
+  const scheduledCount = posts.filter((p) => p.status === 'SCHEDULED').length;
+  const publishedCount = posts.filter((p) => p.status === 'PUBLISHED').length;
+
+  const stats = [
+    { label: 'Connected Accounts', value: profiles.length },
+    { label: 'Total Posts', value: posts.length },
+    { label: 'Scheduled Posts', value: scheduledCount },
+    { label: 'Published Posts', value: publishedCount },
+  ];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <>
+      <h1 className="page-title">Overview Analytics</h1>
+      <p className="page-subtitle">Welcome back! Connect your accounts to see insights.</p>
+
+      <div className="grid-cols-4" style={{ marginBottom: '2rem' }}>
+        {stats.map((s) => (
+          <div className="card" key={s.label}>
+            <div className="stat-label">{s.label}</div>
+            <div className="stat-value">{loading ? '...' : s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid-cols-3">
+        <div className="card" style={{ gridColumn: 'span 2' }}>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem' }}>Growth Overview</h2>
+          <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>No data available to display chart.</span>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="card">
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem' }}>Connected Accounts</h2>
+          {profiles.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', color: 'var(--text-secondary)' }}>
+              <p>No accounts connected yet. Go to Connections to start.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {profiles.map((p) => (
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                  <CheckCircle2 size={16} style={{ color: '#10b981' }} />
+                  <span style={{ color: 'var(--text-secondary)' }}>{p.platform}</span>
+                  <span style={{ fontWeight: 500 }}>{p.username || p.profileId}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }
