@@ -16,9 +16,9 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [content, setContent] = useState('');
   const [socialProfileId, setSocialProfileId] = useState('');
   const [scheduledFor, setScheduledFor] = useState(() => {
-    const now = new Date();
-    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    return now.toISOString().slice(0, 16);
+    const soon = new Date(Date.now() + 5 * 60 * 1000);
+    soon.setMinutes(soon.getMinutes() - soon.getTimezoneOffset());
+    return soon.toISOString().slice(0, 16);
   });
   const [mediaUrls, setMediaUrls] = useState('');
   const [saving, setSaving] = useState(false);
@@ -47,6 +47,14 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
       ignore = true;
     };
   }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,6 +134,12 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
           )}
         </div>
 
+        {!loadingProfiles && profiles.length === 0 && (
+          <div style={{ fontSize: '0.8125rem', color: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            No hay páginas conectadas todavía. Andá a <a href="/connections" style={{ color: 'inherit', fontWeight: 600 }}>Conexiones</a> e importá una Página de Facebook.
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>Contenido</label>
           <textarea
@@ -161,6 +175,9 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
               color: 'var(--text-primary)',
             }}
           />
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            Se interpreta en tu zona horaria. El planificador revisa cada ~60 s, así que se publica en el primer ciclo posterior a esa hora.
+          </span>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -202,6 +219,9 @@ export default function NewPostModal({ open, onClose, onCreated }: NewPostModalP
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Nuevo Post"
       style={{
         position: 'fixed',
         top: 0,
@@ -209,16 +229,20 @@ export default function NewPostModal({ open, onClose, onCreated }: NewPostModalP
         right: 0,
         bottom: 0,
         backgroundColor: 'rgba(0,0,0,0.7)',
-        zIndex: 50,
+        zIndex: 100,
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        overflowY: 'auto',
+        overscrollBehavior: 'contain',
+        padding: '1.5rem 1rem',
         backdropFilter: 'blur(4px)',
       }}
       onClick={onClose}
     >
       <div
         style={{
+          // `margin: auto` centra cuando hay espacio y permite scrollear cuando el
+          // formulario es mas alto que el viewport (a diferencia de align-items: center).
+          margin: 'auto',
           backgroundColor: 'var(--card-bg)',
           width: '100%',
           maxWidth: '520px',

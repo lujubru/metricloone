@@ -12,6 +12,7 @@ export default function ConnectionsPage() {
   const [pages, setPages] = useState<FacebookPage[]>([]);
   const [selectedPages, setSelectedPages] = useState<string[]>([]);
   const [loadingPages, setLoadingPages] = useState(false);
+  const [pagesError, setPagesError] = useState('');
   const [saving, setSaving] = useState(false);
   const [connectedProfiles, setConnectedProfiles] = useState<SocialProfile[]>([]);
 
@@ -29,17 +30,31 @@ export default function ConnectionsPage() {
     loadProfiles();
   }, [session]);
 
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsModalOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isModalOpen]);
+
   const fetchFacebookPages = async () => {
     setLoadingPages(true);
+    setPagesError('');
     setIsModalOpen(true);
     try {
       const res = await fetch('/api/facebook/pages');
+      const data = await res.json();
       if (res.ok) {
-        const data = await res.json();
         setPages(data.pages || []);
+      } else {
+        setPages([]);
+        setPagesError(data.error || 'No se pudieron obtener las páginas de Facebook.');
       }
     } catch (e) {
       console.error(e);
+      setPagesError('Error de red al consultar Facebook.');
     } finally {
       setLoadingPages(false);
     }
@@ -163,8 +178,17 @@ export default function ConnectionsPage() {
       </div>
 
       {isModalOpen && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)'}}>
-          <div style={{ backgroundColor: 'var(--card-bg)', width: '100%', maxWidth: '500px', borderRadius: 'var(--radius-lg)', padding: '2rem', boxShadow: 'var(--shadow-lg)'}}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Selecciona Páginas a Importar"
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.5rem 1rem', backdropFilter: 'blur(4px)'}}
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            style={{ margin: 'auto', backgroundColor: 'var(--card-bg)', width: '100%', maxWidth: '500px', borderRadius: 'var(--radius-lg)', padding: '2rem', boxShadow: 'var(--shadow-lg)'}}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem'}}>
               <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Selecciona Páginas a Importar</h2>
               <button onClick={() => setIsModalOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer'}}><X size={24} /></button>
@@ -196,7 +220,9 @@ export default function ConnectionsPage() {
                     </label>
                   ))}
                   {pages.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No se encontraron páginas administradas o debes iniciar sesión.</div>
+                    <div style={{ textAlign: 'center', padding: '1.5rem', color: pagesError ? '#ef4444' : 'var(--text-secondary)' }}>
+                      {pagesError || 'No se encontraron páginas administradas. Verificá que tu cuenta tenga permisos de administrador sobre alguna Página y que hayas aceptado el permiso pages_show_list.'}
+                    </div>
                   )}
                 </div>
                 
