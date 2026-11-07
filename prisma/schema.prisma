@@ -84,11 +84,16 @@ model Post {
   content         String   @db.Text
   mediaUrls       String[] // Array of media URLs
   scheduledFor    DateTime
-  status          String   @default("DRAFT") // DRAFT, SCHEDULED, PUBLISHED, FAILED
+  status          String   @default("DRAFT") // DRAFT, SCHEDULED, PUBLISHING, PUBLISHED, FAILED
   publishedAt     DateTime?
+  facebookPostId  String?
+  errorMessage    String?  @db.Text
+  attempts        Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   socialProfile   SocialProfile @relation(fields: [socialProfileId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
 }

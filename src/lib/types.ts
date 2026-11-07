@@ -20,6 +20,9 @@ export type Post = {
   scheduledFor: string;
   status: string;
   publishedAt: string | null;
+  facebookPostId?: string | null;
+  errorMessage?: string | null;
+  attempts?: number;
   createdAt: string;
   updatedAt: string;
   socialProfile?: SocialProfile;

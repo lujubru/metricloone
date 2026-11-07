@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { GRAPH_BASE_URL } from "@/lib/facebook";
 
 export async function GET() {
   try {
@@ -25,7 +26,14 @@ export async function GET() {
     }
 
     // Llamar a la API Graph de Facebook para obtener las páginas administradas
-    const response = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${facebookAccount.access_token}`);
+    const params = new URLSearchParams({
+      access_token: facebookAccount.access_token,
+      fields: "id,name,access_token,category",
+      limit: "100",
+    });
+    const response = await fetch(`${GRAPH_BASE_URL}/me/accounts?${params.toString()}`, {
+      cache: "no-store",
+    });
     const data = await response.json();
 
     if (data.error) {

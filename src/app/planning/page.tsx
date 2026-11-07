@@ -1,17 +1,35 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Clock, Plus, Filter, Trash2, Loader2 } from 'lucide-react';
+import { Clock, Plus, Filter, Trash2, Loader2, Send, RotateCcw, AlertCircle } from 'lucide-react';
 import NewPostModal from '@/components/NewPostModal';
 import type { Post } from '@/lib/types';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+const STATUS_LABELS: Record<string, string> = {
+  DRAFT: 'Borrador',
+  SCHEDULED: 'Programado',
+  PUBLISHING: 'Publicando',
+  PUBLISHED: 'Publicado',
+  FAILED: 'Fallido',
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  DRAFT: '#94a3b8',
+  SCHEDULED: '#3b82f6',
+  PUBLISHING: '#f59e0b',
+  PUBLISHED: '#10b981',
+  FAILED: '#ef4444',
+};
 
 export default function Planning() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [isNewPostOpen, setIsNewPostOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -35,8 +53,29 @@ export default function Planning() {
   useEffect(() => {
     const refresh = () => setRefreshKey((k) => k + 1);
     window.addEventListener('posts-updated', refresh);
-    return () => window.removeEventListener('posts-updated', refresh);
+    // Refresca para reflejar lo que publique el scheduler en segundo plano.
+    const interval = setInterval(refresh, 60000);
+    return () => {
+      window.removeEventListener('posts-updated', refresh);
+      clearInterval(interval);
+    };
   }, []);
+
+  const publishPost = async (id: string) => {
+    setPublishingId(id);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/posts/${id}/publish`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) setActionError(data.error || 'No se pudo publicar el post');
+    } catch (e) {
+      console.error(e);
+      setActionError('No se pudo publicar el post');
+    } finally {
+      setPublishingId(null);
+      setRefreshKey((k) => k + 1);
+    }
+  };
 
   const deletePost = async (id: string) => {
     setDeletingId(id);
@@ -153,6 +192,11 @@ export default function Planning() {
 
       <div className="card">
         <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1rem' }}>Próximos Posts</h2>
+        {actionError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-md)', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontSize: '0.85rem' }}>
+            <AlertCircle size={16} /> {actionError}
+          </div>
+        )}
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
             <Loader2 size={18} style={{ animation: 'spin 2s linear infinite' }} /> Cargando posts...
@@ -165,22 +209,49 @@ export default function Planning() {
               <div key={p.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', padding: '0.75rem', backgroundColor: 'var(--sidebar-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>{p.content}</div>
-                  <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', flexWrap: 'wrap', alignItems: 'center' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                       <Clock size={14} /> {formatDate(p.scheduledFor)}
                     </span>
                     <span>{p.socialProfile?.username || p.socialProfile?.profileId || p.socialProfileId}</span>
-                    <span style={{ color: 'var(--primary-color)' }}>{p.status}</span>
+                    <StatusBadge status={p.status} />
+                    {p.status === 'PUBLISHED' && p.publishedAt && (
+                      <span>Publicado el {formatDate(p.publishedAt)}</span>
+                    )}
                   </div>
+                  {p.errorMessage && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.78rem', color: '#ef4444' }}>
+                      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+                      <span>{p.errorMessage}</span>
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={() => deletePost(p.id)}
-                  disabled={deletingId === p.id}
-                  style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0.25rem' }}
-                  title="Eliminar post"
-                >
-                  {deletingId === p.id ? <Loader2 size={18} style={{ animation: 'spin 2s linear infinite' }} /> : <Trash2 size={18} />}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                  {p.status !== 'PUBLISHED' && p.status !== 'PUBLISHING' && (
+                    <button
+                      onClick={() => publishPost(p.id)}
+                      disabled={publishingId === p.id}
+                      style={{ background: 'none', border: 'none', color: 'var(--primary-color)', cursor: 'pointer', padding: '0.25rem' }}
+                      title={p.status === 'FAILED' ? 'Reintentar publicación' : 'Publicar ahora'}
+                    >
+                      {publishingId === p.id ? (
+                        <Loader2 size={18} style={{ animation: 'spin 2s linear infinite' }} />
+                      ) : p.status === 'FAILED' ? (
+                        <RotateCcw size={18} />
+                      ) : (
+                        <Send size={18} />
+                      )}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => deletePost(p.id)}
+                    disabled={deletingId === p.id}
+                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0.25rem' }}
+                    title="Eliminar post"
+                  >
+                    {deletingId === p.id ? <Loader2 size={18} style={{ animation: 'spin 2s linear infinite' }} /> : <Trash2 size={18} />}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -197,5 +268,24 @@ export default function Planning() {
         @keyframes spin { 100% { transform: rotate(360deg); } }
       ` }} />
     </>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const key = (status || '').toUpperCase();
+  const color = STATUS_COLORS[key] || 'var(--text-secondary)';
+
+  return (
+    <span style={{
+      color,
+      backgroundColor: `${color}1f`,
+      border: `1px solid ${color}55`,
+      borderRadius: '999px',
+      padding: '0.05rem 0.5rem',
+      fontSize: '0.7rem',
+      fontWeight: 600,
+    }}>
+      {STATUS_LABELS[key] || status}
+    </span>
   );
 }
