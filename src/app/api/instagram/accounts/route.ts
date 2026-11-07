@@ -1,43 +1,57 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { FacebookApiError } from "@/lib/facebook";
 import { listInstagramAccounts } from "@/lib/instagram";
 
+export const dynamic = "force-dynamic";
+
+/** Cuentas de Instagram vinculadas a las Páginas de Facebook ya conectadas. */
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
+
+    const connection = await prisma.fbConnection.findUnique({
+      where: { tenantId: auth.tenantId },
+    });
+    if (!connection?.userAccessToken) {
+      return NextResponse.json({ error: "Conectá Facebook primero" }, { status: 404 });
     }
 
-    const facebookAccount = await prisma.account.findFirst({
-      where: { userId: session.user.id, provider: "facebook" },
+    const pages = await prisma.socialProfile.findMany({
+      where: { tenantId: auth.tenantId, platform: "facebook_page" },
+      select: { profileId: true },
     });
 
-    if (!facebookAccount?.access_token) {
-      return NextResponse.json({ error: "Cuenta de Facebook no conectada" }, { status: 404 });
+    if (pages.length === 0) {
+      return NextResponse.json(
+        {
+          accounts: [],
+          warnings: ["Primero conectá al menos una Página de Facebook para traer su Instagram."],
+        },
+        { status: 200 }
+      );
     }
 
-    const accounts = await listInstagramAccounts(facebookAccount.access_token);
+    const accounts = await listInstagramAccounts(
+      connection.userAccessToken,
+      pages.map((page) => page.profileId)
+    );
 
-    // El token de página nunca se envía al cliente: se resuelve de nuevo al guardar.
-    return NextResponse.json({
-      accounts: accounts.map((account) => ({
-        id: account.id,
-        username: account.username,
-        profilePictureUrl: account.profilePictureUrl,
-        followersCount: account.followersCount,
-        pageId: account.pageId,
-        pageName: account.pageName,
-      })),
-    });
+    const warnings =
+      accounts.length === 0
+        ? [
+            "Ninguna de las Páginas conectadas tiene una cuenta de Instagram Business vinculada. Vinculá el Instagram en la configuración de la Página de Facebook.",
+          ]
+        : [];
+
+    return NextResponse.json({ accounts, warnings });
   } catch (error) {
     if (error instanceof FacebookApiError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     console.error("Error al obtener las cuentas de Instagram:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }

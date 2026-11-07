@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSession, signIn, signOut } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
+import Link from 'next/link';
 import { LogOut, Trash2, Loader2, User } from 'lucide-react';
 import type { SocialProfile } from '@/lib/types';
 
@@ -67,9 +68,9 @@ export default function Settings() {
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
             <p style={{ color: 'var(--text-secondary)' }}>No has iniciado sesión.</p>
-            <button className="btn btn-primary" onClick={() => signIn('facebook')}>
+            <Link className="btn btn-primary" href="/login">
               Iniciar sesión
-            </button>
+            </Link>
           </div>
         )}
       </div>

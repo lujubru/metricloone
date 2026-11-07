@@ -1,26 +1,22 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
 
-    const userId = session.user.id;
-
-    // Fetch all connected profiles for the logged-in user
     const profiles = await prisma.socialProfile.findMany({
-      where: { userId },
+      where: { tenantId: auth.tenantId },
       orderBy: { createdAt: "desc" },
     });
 
     return NextResponse.json({ profiles });
   } catch (error) {
     console.error("Error fetching profiles:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }

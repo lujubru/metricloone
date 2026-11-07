@@ -1,13 +1,48 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useSession, signIn } from 'next-auth/react';
-import { CheckCircle2, MoreVertical, Plus, X, Loader2 } from 'lucide-react';
+import { Suspense, useMemo, useState, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
+import { useSearchParams } from 'next/navigation';
+import { AlertCircle, CheckCircle2, MoreVertical, Plus, X, Loader2 } from 'lucide-react';
 import type { FacebookPage, SocialProfile, InstagramAccountItem } from '@/lib/types';
 
+type TenantStatus = {
+  name: string;
+  fbAppId: string | null;
+  hasCredentials: boolean;
+  facebook: { fbUserName: string | null } | null;
+};
+
+const ERROR_MESSAGES: Record<string, string> = {
+  tenant: 'Tu cuenta no tiene un espacio asignado. Contactá al administrador.',
+  credentials:
+    'Todavía no se cargaron las credenciales de tu app de Facebook. Pedíselas al administrador.',
+  oauth_cancelado: 'Cancelaste la autorización en Facebook.',
+  state_invalido: 'La autorización expiró o no es válida. Volvé a intentarlo.',
+  credenciales: 'Las credenciales de la app de Facebook son incorrectas. Avisá al administrador.',
+  exchange: 'Facebook no aceptó la autorización. Revisá la Redirect URI de tu app.',
+};
+
+type Banner = { type: 'success' | 'error'; message: string };
+
 export default function ConnectionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ConnectionsContent />
+    </Suspense>
+  );
+}
+
+function ConnectionsContent() {
   const { data: session } = useSession();
-  
+  const searchParams = useSearchParams();
+
+  const [tenantStatus, setTenantStatus] = useState<TenantStatus | null>(null);
+  // Los avisos que llegan por query string se derivan en render; el estado sólo
+  // guarda si el usuario los cerró o si hay un aviso generado por la propia UI.
+  const [queryBannerDismissed, setQueryBannerDismissed] = useState(false);
+  const [manualBanner, setManualBanner] = useState<Banner | null>(null);
+
   const [modalType, setModalType] = useState<'facebook' | 'instagram' | null>(null);
   const [pages, setPages] = useState<FacebookPage[]>([]);
   const [selectedPages, setSelectedPages] = useState<string[]>([]);
@@ -20,6 +55,36 @@ export default function ConnectionsPage() {
   const [accountsError, setAccountsError] = useState('');
   const [saving, setSaving] = useState(false);
   const [connectedProfiles, setConnectedProfiles] = useState<SocialProfile[]>([]);
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      const res = await fetch('/api/tenant');
+      if (res.ok) {
+        const data = await res.json();
+        setTenantStatus(data.tenant ?? null);
+      }
+    };
+    loadStatus();
+  }, []);
+
+  const queryBanner = useMemo<Banner | null>(() => {
+    // Resultado del OAuth que vuelve desde Facebook.
+    if (searchParams.get('connected') === 'facebook') {
+      return { type: 'success', message: 'Facebook quedó conectado. Ya podés importar tus Páginas.' };
+    }
+    const code = searchParams.get('error');
+    if (code) {
+      return { type: 'error', message: ERROR_MESSAGES[code] ?? 'No se pudo conectar con Facebook.' };
+    }
+    return null;
+  }, [searchParams]);
+
+  const banner = manualBanner ?? (queryBannerDismissed ? null : queryBanner);
+
+  const dismissBanner = () => {
+    setManualBanner(null);
+    setQueryBannerDismissed(true);
+  };
 
   useEffect(() => {
     // Cargar los perfiles que están conectados en la base de datos real
@@ -159,20 +224,44 @@ export default function ConnectionsPage() {
     }
   };
 
+  const startFacebookConnect = () => {
+    if (!tenantStatus?.hasCredentials) {
+      setManualBanner({
+        type: 'error',
+        message:
+          'Tu cuenta todavía no tiene el App ID y App Secret de Facebook. Pedíselos al administrador antes de conectar.',
+      });
+      return;
+    }
+    // Se sale de NextAuth: cada cuenta usa su propia app de Meta. La ruta de API
+    // responde con un redirect 302 hacia facebook.com, así que hace falta una
+    // navegación completa del documento (no router.push).
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.href = '/api/connect/facebook/start';
+  };
+
+  const handleFacebookClick = () => {
+    if (!tenantStatus?.facebook) {
+      startFacebookConnect();
+      return;
+    }
+    void fetchFacebookPages();
+  };
+
   const networkCards = [
     {
       id: 'facebook',
       name: 'Facebook',
       color: '#1877F2',
       icon: <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>,
-      action: session ? fetchFacebookPages : () => signIn("facebook")
+      action: handleFacebookClick
     },
     {
       id: 'instagram',
       name: 'Instagram',
       color: '#E1306C',
       icon: <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>,
-      action: session ? fetchInstagramAccounts : () => signIn("facebook")
+      action: () => { void fetchInstagramAccounts(); }
     }
   ];
 
@@ -206,6 +295,49 @@ export default function ConnectionsPage() {
           <p className="page-subtitle" style={{ marginBottom: 0 }}>Conecta tus perfiles sociales para comenzar a administrarlos.</p>
         </div>
       </div>
+
+      {banner && (
+        <div
+          className="card"
+          style={{
+            marginBottom: '1.5rem',
+            borderColor: banner.type === 'error' ? '#ef4444' : '#10b981',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.6rem',
+          }}
+        >
+          {banner.type === 'error' ? (
+            <AlertCircle size={18} color="#ef4444" />
+          ) : (
+            <CheckCircle2 size={18} color="#10b981" />
+          )}
+          <span style={{ flex: 1, fontSize: '0.9rem' }}>{banner.message}</span>
+          <button
+            onClick={dismissBanner}
+            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+            aria-label="Cerrar aviso"
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
+      {tenantStatus && !tenantStatus.hasCredentials && (
+        <div
+          className="card"
+          style={{
+            marginBottom: '1.5rem',
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.12)',
+            fontSize: '0.875rem',
+            color: '#fbbf24',
+          }}
+        >
+          El administrador todavía no cargó el App ID / App Secret de tu app de Facebook, por eso no
+          podés conectar redes.
+        </div>
+      )}
 
       {connectedProfiles.length > 0 && (
         <>

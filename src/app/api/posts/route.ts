@@ -1,20 +1,17 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
-
-    const userId = session.user.id;
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
 
     const posts = await prisma.post.findMany({
-      where: { userId },
+      where: { tenantId: auth.tenantId },
       include: { socialProfile: true },
       orderBy: { scheduledFor: "asc" },
     });
@@ -22,36 +19,33 @@ export async function GET() {
     return NextResponse.json({ posts });
   } catch (error) {
     console.error("Error al obtener los posts:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
 
-    const userId = session.user.id;
     const body = await req.json();
     const { content, scheduledFor, socialProfileId, mediaUrls } = body || {};
 
     if (!content || typeof content !== "string" || !content.trim()) {
-      return NextResponse.json({ error: "El contenido es obligatorio" }, { status: 400 });
+      return badRequest("El contenido es obligatorio");
     }
 
     if (!socialProfileId) {
-      return NextResponse.json({ error: "Debes seleccionar un perfil" }, { status: 400 });
+      return badRequest("Debes seleccionar un perfil");
     }
 
     if (!scheduledFor || isNaN(new Date(scheduledFor).getTime())) {
-      return NextResponse.json({ error: "La fecha de programación es inválida" }, { status: 400 });
+      return badRequest("La fecha de programación es inválida");
     }
 
-    // Verificar que el perfil pertenece al usuario
+    // El perfil tiene que pertenecer a la cuenta del usuario.
     const profile = await prisma.socialProfile.findFirst({
-      where: { id: socialProfileId, userId },
+      where: { id: socialProfileId, tenantId: auth.tenantId },
     });
 
     if (!profile) {
@@ -66,18 +60,15 @@ export async function POST(req: Request) {
 
     // Instagram no permite publicaciones sin imagen o video.
     if (profile.platform === INSTAGRAM_PLATFORM && cleanMediaUrls.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "Instagram requiere al menos una imagen o video: agregá la URL pública del medio.",
-        },
-        { status: 400 }
+      return badRequest(
+        "Instagram requiere al menos una imagen o video: agregá la URL pública del medio."
       );
     }
 
     const post = await prisma.post.create({
       data: {
-        userId,
+        tenantId: auth.tenantId,
+        userId: auth.user.id,
         socialProfileId,
         content: content.trim(),
         mediaUrls: cleanMediaUrls,
@@ -89,6 +80,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, post }, { status: 201 });
   } catch (error) {
     console.error("Error al crear el post:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }

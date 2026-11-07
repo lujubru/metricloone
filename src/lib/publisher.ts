@@ -184,22 +184,22 @@ export async function publishDuePosts(now = new Date()): Promise<PublishRunResul
 }
 
 /**
- * Publica un post concreto de un usuario (botón "Publicar ahora" / reintento manual).
+ * Publica un post concreto de una cuenta (botón "Publicar ahora" / reintento manual).
  * Solo acepta posts en DRAFT, SCHEDULED o FAILED que no estén ya publicándose.
  */
 export async function publishPostById(
   postId: string,
-  userId: string
+  tenantId: string
 ): Promise<PublishOutcome | null> {
   const post = await prisma.post.findFirst({
-    where: { id: postId, userId },
+    where: { id: postId, tenantId },
     include: { socialProfile: true },
   });
 
   if (!post) return null;
 
   const claim = await prisma.post.updateMany({
-    where: { id: postId, userId, status: { in: ["SCHEDULED", "DRAFT", "FAILED"] } },
+    where: { id: postId, tenantId, status: { in: ["SCHEDULED", "DRAFT", "FAILED"] } },
     data: { status: "SCHEDULED", attempts: post.status === "FAILED" ? 0 : post.attempts },
   });
 

@@ -1,22 +1,17 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireTenant, serverError } from "@/lib/api";
 import { publishPostById } from "@/lib/publisher";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export async function POST(
-  _req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
+export async function POST(_req: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
 
     const { id } = await context.params;
-    const outcome = await publishPostById(id, session.user.id);
+    const outcome = await publishPostById(id, auth.tenantId);
 
     if (!outcome) {
       return NextResponse.json(
@@ -35,6 +30,6 @@ export async function POST(
     );
   } catch (error) {
     console.error("Error al publicar el post:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }

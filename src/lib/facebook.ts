@@ -184,6 +184,80 @@ export async function grantedPermissions(userAccessToken: string): Promise<strin
   return data.filter((item) => item.status === "granted").map((item) => item.permission);
 }
 
+/** URL del diálogo OAuth de la app del cliente. */
+export function buildOAuthDialogUrl({
+  appId,
+  redirectUri,
+  state,
+  scope = FACEBOOK_SCOPE_STRING,
+}: {
+  appId: string;
+  redirectUri: string;
+  state: string;
+  scope?: string;
+}): string {
+  const url = new URL(`https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth`);
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("state", state);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", scope);
+  return url.toString();
+}
+
+type TokenResponse = {
+  access_token: string;
+  token_type?: string;
+  expires_in?: number;
+};
+
+/** Canjea el `code` del callback por un access token de usuario. */
+export async function exchangeCodeForToken({
+  appId,
+  appSecret,
+  redirectUri,
+  code,
+}: {
+  appId: string;
+  appSecret: string;
+  redirectUri: string;
+  code: string;
+}): Promise<TokenResponse> {
+  return graphRequest<TokenResponse>("/oauth/access_token", {
+    client_id: appId,
+    client_secret: appSecret,
+    redirect_uri: redirectUri,
+    code,
+  });
+}
+
+/**
+ * Cambia un token corto por uno de larga duración (60 días). Requiere el App
+ * Secret, pero los Page tokens que se derivan después no expiran.
+ */
+export async function exchangeForLongLivedToken({
+  appId,
+  appSecret,
+  accessToken,
+}: {
+  appId: string;
+  appSecret: string;
+  accessToken: string;
+}): Promise<TokenResponse> {
+  return graphRequest<TokenResponse>("/oauth/access_token", {
+    grant_type: "fb_exchange_token",
+    client_id: appId,
+    client_secret: appSecret,
+    fb_exchange_token: accessToken,
+  });
+}
+
+export async function getFacebookUser(accessToken: string): Promise<{ id: string; name?: string }> {
+  return graphRequest<{ id: string; name?: string }>(
+    `/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
+  );
+}
+
 export type PublishInput = {
   pageId: string;
   accessToken: string;

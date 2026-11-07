@@ -1,10 +1,13 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BarChart3, CalendarDays, Inbox, Settings, Share2, Link as LinkIcon } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { BarChart3, CalendarDays, Inbox, Settings, Share2, Link as LinkIcon, ShieldCheck } from 'lucide-react';
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === 'ADMIN';
 
   const navItems = [
     { name: 'Analytics', path: '/', icon: <BarChart3 size={20} /> },
@@ -13,6 +16,7 @@ export default function Sidebar() {
     { name: 'SmartLink', path: '/smartlink', icon: <LinkIcon size={20} /> },
     { name: 'Connections', path: '/connections', icon: <Share2 size={20} /> },
     { name: 'Settings', path: '/settings', icon: <Settings size={20} /> },
+    ...(isAdmin ? [{ name: 'Admin', path: '/admin', icon: <ShieldCheck size={20} /> }] : []),
   ];
 
   return (

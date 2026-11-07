@@ -1,31 +1,81 @@
-import { NextAuthOptions } from "next-auth";
-import type { Adapter } from "next-auth/adapters";
-import FacebookProvider from "next-auth/providers/facebook";
-import { PrismaAdapter } from "@auth/prisma-adapter";
+import type { NextAuthOptions } from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
+import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
-import { FACEBOOK_SCOPE_STRING } from "./facebook";
 
+/**
+ * Login propio con email y contraseña: la conexión con Facebook es por tenant
+ * (`/api/connect/facebook/start`) y no forma parte de la sesión.
+ */
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma) as unknown as Adapter,
+  secret: process.env.NEXTAUTH_SECRET,
+  // Con CredentialsProvider las sesiones se guardan en un JWT.
+  session: { strategy: "jwt" },
+  pages: { signIn: "/login" },
   providers: [
-    FacebookProvider({
-      clientId: process.env.FACEBOOK_CLIENT_ID || "",
-      clientSecret: process.env.FACEBOOK_CLIENT_SECRET || "",
-      authorization: {
-        params: {
-          // Permisos de páginas e Instagram (cuentas Business/Creator vinculadas a una Página).
-          // business_management alcanza las Páginas que viven dentro de un Business Portfolio.
-          // El listado vive en lib/facebook.ts para poder auditarlo contra el token.
-          scope: FACEBOOK_SCOPE_STRING,
-        },
+    CredentialsProvider({
+      name: "Email y contraseña",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Contraseña", type: "password" },
+      },
+      async authorize(credentials) {
+        const email = credentials?.email?.trim().toLowerCase();
+        const password = credentials?.password ?? "";
+        if (!email || !password) return null;
+
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user?.passwordHash) return null;
+
+        const isValid = await bcrypt.compare(password, user.passwordHash);
+        if (!isValid) return null;
+
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          tenantId: user.tenantId,
+        };
       },
     }),
   ],
   callbacks: {
-    async session({ session, user }) {
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.role = user.role;
+        token.tenantId = user.tenantId;
+      }
+
+      // Se revalida en cada request para que los cambios de rol o de cuenta
+      // impacten sin necesidad de volver a iniciar sesión.
+      if (!token.id) return token;
+
+      const dbUser = await prisma.user.findUnique({
+        where: { id: token.id },
+        select: { id: true, name: true, email: true, role: true, tenantId: true },
+      });
+
+      if (!dbUser) {
+        delete token.id;
+        delete token.role;
+        delete token.tenantId;
+        return token;
+      }
+
+      token.id = dbUser.id;
+      token.name = dbUser.name;
+      token.email = dbUser.email;
+      token.role = dbUser.role;
+      token.tenantId = dbUser.tenantId;
+      return token;
+    },
+    async session({ session, token }) {
       if (session.user) {
-        // Añadimos el ID del usuario a la sesión para poder usarlo en las consultas a la DB
-        session.user.id = user.id;
+        session.user.id = token.id ?? "";
+        session.user.role = token.role ?? "CLIENT";
+        session.user.tenantId = token.tenantId ?? null;
       }
       return session;
     },

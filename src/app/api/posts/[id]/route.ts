@@ -1,29 +1,25 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
 
-export async function PATCH(
-  req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
+export const dynamic = "force-dynamic";
 
-    const userId = session.user.id;
+function notFound() {
+  return NextResponse.json({ error: "Post no encontrado" }, { status: 404 });
+}
+
+export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
+
     const { id } = await context.params;
     const body = await req.json().catch(() => null);
     const { scheduledFor, content, mediaUrls } = body || {};
 
-    const post = await prisma.post.findFirst({ where: { id, userId } });
-
-    if (!post) {
-      return NextResponse.json({ error: "Post no encontrado" }, { status: 404 });
-    }
+    const post = await prisma.post.findFirst({ where: { id, tenantId: auth.tenantId } });
+    if (!post) return notFound();
 
     if (post.status === "PUBLISHING") {
       return NextResponse.json(
@@ -33,10 +29,7 @@ export async function PATCH(
     }
 
     if (post.status === "PUBLISHED") {
-      return NextResponse.json(
-        { error: "El post ya fue publicado" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "El post ya fue publicado" }, { status: 409 });
     }
 
     const data: {
@@ -49,16 +42,12 @@ export async function PATCH(
 
     if (scheduledFor !== undefined) {
       const date = new Date(scheduledFor);
-      if (isNaN(date.getTime())) {
-        return NextResponse.json({ error: "La fecha de programación es inválida" }, { status: 400 });
-      }
+      if (isNaN(date.getTime())) return badRequest("La fecha de programación es inválida");
       data.scheduledFor = date;
     }
 
     if (content !== undefined) {
-      if (typeof content !== "string" || !content.trim()) {
-        return NextResponse.json({ error: "El contenido es obligatorio" }, { status: 400 });
-      }
+      if (typeof content !== "string" || !content.trim()) return badRequest("El contenido es obligatorio");
       data.content = content.trim();
     }
 
@@ -75,12 +64,8 @@ export async function PATCH(
     const finalMedia = data.mediaUrls ?? post.mediaUrls;
 
     if (profile?.platform === INSTAGRAM_PLATFORM && finalMedia.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "Instagram requiere al menos una imagen o video: agregá la URL pública del medio.",
-        },
-        { status: 400 }
+      return badRequest(
+        "Instagram requiere al menos una imagen o video: agregá la URL pública del medio."
       );
     }
 
@@ -96,36 +81,25 @@ export async function PATCH(
     return NextResponse.json({ success: true, post: updated });
   } catch (error) {
     console.error("Error al actualizar el post:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }
 
-export async function DELETE(
-  _req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
 
-    const userId = session.user.id;
     const { id } = await context.params;
 
-    const post = await prisma.post.findFirst({
-      where: { id, userId },
-    });
-
-    if (!post) {
-      return NextResponse.json({ error: "Post no encontrado" }, { status: 404 });
-    }
+    const post = await prisma.post.findFirst({ where: { id, tenantId: auth.tenantId } });
+    if (!post) return notFound();
 
     await prisma.post.delete({ where: { id } });
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error al eliminar el post:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }

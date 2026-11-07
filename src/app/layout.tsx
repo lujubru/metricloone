@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import Sidebar from '@/components/Sidebar';
-import Topbar from '@/components/Topbar';
+import AppShell from '@/components/AppShell';
 import { Providers } from './Providers';
 
 export const metadata: Metadata = {
@@ -23,15 +22,7 @@ export default function RootLayout({
       </head>
       <body>
         <Providers>
-          <div className="app-container">
-            <Sidebar />
-            <div className="main-content">
-              <Topbar />
-              <div className="page-content">
-                {children}
-              </div>
-            </div>
-          </div>
+          <AppShell>{children}</AppShell>
         </Providers>
       </body>
     </html>

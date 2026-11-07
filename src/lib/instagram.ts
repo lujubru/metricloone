@@ -37,8 +37,14 @@ type GraphPage = {
  * Descubre las cuentas de Instagram Business vinculadas a las Páginas que
  * administra el usuario. Requiere los permisos `instagram_basic` y
  * `pages_show_list` sobre el token de usuario de Facebook.
+ *
+ * `allowedPageIds` limita el resultado a las Páginas que la cuenta ya conectó,
+ * para que Instagram siempre derive de una conexión de Facebook existente.
  */
-export async function listInstagramAccounts(userAccessToken: string): Promise<InstagramAccount[]> {
+export async function listInstagramAccounts(
+  userAccessToken: string,
+  allowedPageIds?: string[]
+): Promise<InstagramAccount[]> {
   // Mismas Páginas que usa el conector de Facebook: incluye paginación y
   // Páginas de portafolios comerciales donde puede haber IG vinculado.
   const { pages } = await listManagedPages(
@@ -46,10 +52,12 @@ export async function listInstagramAccounts(userAccessToken: string): Promise<In
     "id,name,access_token,instagram_business_account{id,username,profile_picture_url,followers_count}"
   );
   const accounts: InstagramAccount[] = [];
+  const allowed = allowedPageIds ? new Set(allowedPageIds) : null;
 
   for (const page of pages as GraphPage[]) {
     const ig = page.instagram_business_account;
     if (!ig?.id) continue;
+    if (allowed && !allowed.has(page.id)) continue;
 
     accounts.push({
       id: ig.id,

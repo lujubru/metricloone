@@ -1,43 +1,45 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { FacebookApiError } from "@/lib/facebook";
 import { INSTAGRAM_PLATFORM, listInstagramAccounts } from "@/lib/instagram";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
+    const auth = await requireTenant();
+    if ("response" in auth) return auth.response;
 
-    const userId = session.user.id;
     const body = await req.json();
     const { selectedAccounts } = body as { selectedAccounts?: string[] };
 
     if (!Array.isArray(selectedAccounts) || selectedAccounts.length === 0) {
-      return NextResponse.json({ error: "Formato de datos inválido" }, { status: 400 });
+      return badRequest("Formato de datos inválido");
     }
 
-    const facebookAccount = await prisma.account.findFirst({
-      where: { userId, provider: "facebook" },
+    const connection = await prisma.fbConnection.findUnique({
+      where: { tenantId: auth.tenantId },
+    });
+    if (!connection?.userAccessToken) {
+      return NextResponse.json({ error: "Conectá Facebook primero" }, { status: 404 });
+    }
+
+    const pages = await prisma.socialProfile.findMany({
+      where: { tenantId: auth.tenantId, platform: "facebook_page" },
+      select: { profileId: true },
     });
 
-    if (!facebookAccount?.access_token) {
-      return NextResponse.json({ error: "Cuenta de Facebook no conectada" }, { status: 404 });
-    }
-
-    // Re-resolvemos las cuentas para obtener el token de página en el servidor,
-    // sin depender de lo que envíe el cliente.
-    const accounts = await listInstagramAccounts(facebookAccount.access_token);
+    // Solo se ofrecen cuentas de IG de Páginas ya conectadas, y el token de
+    // página se resuelve en el servidor (nunca se confía en el cliente).
+    const accounts = await listInstagramAccounts(
+      connection.userAccessToken,
+      pages.map((page) => page.profileId)
+    );
     const selected = accounts.filter((account) => selectedAccounts.includes(account.id));
 
     if (selected.length === 0) {
-      return NextResponse.json(
-        { error: "Ninguna de las cuentas seleccionadas está disponible" },
-        { status: 400 }
-      );
+      return badRequest("Ninguna de las cuentas seleccionadas está disponible");
     }
 
     let savedCount = 0;
@@ -45,23 +47,27 @@ export async function POST(req: Request) {
     for (const account of selected) {
       await prisma.socialProfile.upsert({
         where: {
-          platform_profileId: {
+          tenantId_platform_profileId: {
+            tenantId: auth.tenantId,
             platform: INSTAGRAM_PLATFORM,
             profileId: account.id,
           },
         },
         update: {
-          userId,
+          userId: auth.user.id,
           username: account.username,
           accessToken: account.pageAccessToken,
+          parentProfileId: account.pageId,
           updatedAt: new Date(),
         },
         create: {
-          userId,
+          tenantId: auth.tenantId,
+          userId: auth.user.id,
           platform: INSTAGRAM_PLATFORM,
           profileId: account.id,
           username: account.username,
           accessToken: account.pageAccessToken,
+          parentProfileId: account.pageId,
         },
       });
       savedCount += 1;
@@ -73,6 +79,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     console.error("Error al guardar las cuentas de Instagram:", error);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    return serverError();
   }
 }
