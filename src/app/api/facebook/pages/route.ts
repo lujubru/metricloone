@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { GRAPH_BASE_URL } from "@/lib/facebook";
+import { grantedPermissions, listManagedPages } from "@/lib/facebook";
+
+const REQUIRED_PERMISSIONS = [
+  "pages_show_list",
+  "pages_manage_posts",
+  "business_management",
+] as const;
 
 export async function GET() {
   try {
@@ -25,23 +31,25 @@ export async function GET() {
       return NextResponse.json({ error: "Cuenta de Facebook no conectada" }, { status: 404 });
     }
 
-    // Llamar a la API Graph de Facebook para obtener las páginas administradas
-    const params = new URLSearchParams({
-      access_token: facebookAccount.access_token,
-      fields: "id,name,access_token,category",
-      limit: "100",
-    });
-    const response = await fetch(`${GRAPH_BASE_URL}/me/accounts?${params.toString()}`, {
-      cache: "no-store",
-    });
-    const data = await response.json();
+    // /me/accounts + Páginas de portafolios comerciales, siguiendo la paginación
+    const { pages, warnings } = await listManagedPages(facebookAccount.access_token);
 
-    if (data.error) {
-      return NextResponse.json({ error: data.error.message }, { status: 400 });
+    // El token puede ser más viejo que los permisos declarados en auth.ts:
+    // avisamos qué falta para que el usuario vuelva a autorizar la app.
+    try {
+      const granted = await grantedPermissions(facebookAccount.access_token);
+      const missing = REQUIRED_PERMISSIONS.filter((permission) => !granted.includes(permission));
+      if (missing.length > 0) {
+        warnings.push(
+          `Tu sesión de Facebook no tiene estos permisos: ${missing.join(", ")}. Cerrá sesión y volvé a entrar con Facebook para concederlos, y tildá todas las Páginas en la pantalla de autorización.`
+        );
+      }
+    } catch {
+      // Si no se pueden leer los permisos, igual devolvemos las Páginas encontradas.
     }
 
     // Devuelve la lista de páginas de Facebook (con sus id, name y access_token específicos de página)
-    return NextResponse.json({ pages: data.data });
+    return NextResponse.json({ pages, warnings });
   } catch (error) {
     console.error("Error al obtener las páginas de FB:", error);
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });

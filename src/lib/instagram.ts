@@ -1,4 +1,4 @@
-import { FacebookApiError, graphRequest } from "./facebook";
+import { FacebookApiError, graphRequest, listManagedPages } from "./facebook";
 
 /** Máximo de items que acepta un carrusel de Instagram. */
 const MAX_CAROUSEL_ITEMS = 10;
@@ -39,17 +39,15 @@ type GraphPage = {
  * `pages_show_list` sobre el token de usuario de Facebook.
  */
 export async function listInstagramAccounts(userAccessToken: string): Promise<InstagramAccount[]> {
-  const params = new URLSearchParams({
-    access_token: userAccessToken,
-    fields:
-      "id,name,access_token,instagram_business_account{id,username,profile_picture_url,followers_count}",
-    limit: "100",
-  });
-
-  const data = await graphRequest<{ data: GraphPage[] }>(`/me/accounts?${params.toString()}`);
+  // Mismas Páginas que usa el conector de Facebook: incluye paginación y
+  // Páginas de portafolios comerciales donde puede haber IG vinculado.
+  const { pages } = await listManagedPages(
+    userAccessToken,
+    "id,name,access_token,instagram_business_account{id,username,profile_picture_url,followers_count}"
+  );
   const accounts: InstagramAccount[] = [];
 
-  for (const page of data.data || []) {
+  for (const page of pages as GraphPage[]) {
     const ig = page.instagram_business_account;
     if (!ig?.id) continue;
 

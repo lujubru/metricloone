@@ -3,6 +3,7 @@ import type { Adapter } from "next-auth/adapters";
 import FacebookProvider from "next-auth/providers/facebook";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "./prisma";
+import { FACEBOOK_SCOPE_STRING } from "./facebook";
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as unknown as Adapter,
@@ -14,8 +15,8 @@ export const authOptions: NextAuthOptions = {
         params: {
           // Permisos de páginas e Instagram (cuentas Business/Creator vinculadas a una Página).
           // business_management alcanza las Páginas que viven dentro de un Business Portfolio.
-          scope:
-            "email,public_profile,business_management,pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish",
+          // El listado vive en lib/facebook.ts para poder auditarlo contra el token.
+          scope: FACEBOOK_SCOPE_STRING,
         },
       },
     }),

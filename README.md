@@ -58,7 +58,16 @@ Los permisos de Instagram (`instagram_basic`, `instagram_content_publish`) deben
 
 ### Páginas que no aparecen al importar
 
-El diálogo de Facebook Login pide autorización **por Página** (checkboxes). Si no se tildan todas, la Graph API solo devuelve las tildadas. Para volver a elegirlas: eliminar la app en <https://www.facebook.com/settings?tab=business_tools> y loguearse de nuevo. Si aun así faltan, verificar que el usuario tenga rol de Administrador o Editor sobre la Página (los accesos parciales de Business Manager no alcanzan).
+La app pide la lista completa: recorre todas las páginas de resultados de `/me/accounts` y además suma las Páginas de los Business Portfolios del usuario (`/{business}/owned_pages` y `/{business}/client_pages`, requieren `business_management`). Si al abrir el modal faltan Páginas, el propio modal muestra los motivos detectados (conteo, permisos que faltan en el token y aviso de portafolio comercial).
+
+Causas habituales, en orden de frecuencia:
+
+1. **El diálogo de Facebook Login autoriza Página por Página** (checkboxes). Las que no se tildaron nunca se devuelven. Para volver a elegirlas: <https://www.facebook.com/settings?tab=business_tools> → la app → **Ver y editar** → tildar todas las Páginas; o eliminar la app y volver a iniciar sesión.
+2. **El token guardado es anterior a los permisos actuales.** NextAuth no renueva el token al agregar scopes, así que un token viejo puede no tener `business_management` ni los de Instagram. Se detecta comparando `/me/permissions` con `FACEBOOK_SCOPES` (`src/lib/facebook.ts`); la solución es cerrar sesión y volver a entrar con Facebook.
+3. **La Página vive en un Business Portfolio y el usuario no tiene rol directo** sobre ella: sin `business_management` no aparece en `/me/accounts`. También hay que aceptar la invitación a ese portafolio en Business Suite.
+4. **Rol insuficiente**: hacen falta permisos de Administrador o Editor sobre la Página (los accesos parciales de Business Manager no alcanzan).
+
+Para verificar qué está pasando con un token concreto: `/me/permissions` (permisos concedidos) y `/me/accounts` (Páginas visibles).
 
 ### Pasar la app a producción (usuarios fuera de los roles)
 
@@ -86,9 +95,9 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | Ruta | Métodos | Uso |
 | --- | --- | --- |
 | `/api/auth/[...nextauth]` | GET/POST | Login/logout con Facebook. |
-| `/api/facebook/pages` | GET | Lista las Páginas del usuario autenticado en Facebook. |
+| `/api/facebook/pages` | GET | Lista las Páginas del usuario autenticado en Facebook (paginado + Páginas de Business Portfolio) y devuelve `warnings` con los permisos faltantes. |
 | `/api/facebook/save-pages` | POST | Guarda las Páginas seleccionadas como `SocialProfile`. |
-| `/api/instagram/accounts` | GET | Lista las cuentas de Instagram Business vinculadas a las Páginas del usuario (no expone tokens). |
+| `/api/instagram/accounts` | GET | Lista las cuentas de Instagram Business vinculadas a las Páginas del usuario (misma detección de Páginas que Facebook, sin exponer tokens). |
 | `/api/instagram/save-accounts` | POST | Guarda las cuentas de Instagram seleccionadas como `SocialProfile` (`instagram_business`). |
 | `/api/profiles` | GET | Perfiles conectados del usuario. |
 | `/api/profiles/[id]` | DELETE | Desconecta un perfil. |

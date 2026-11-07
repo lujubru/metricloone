@@ -13,6 +13,7 @@ export default function ConnectionsPage() {
   const [selectedPages, setSelectedPages] = useState<string[]>([]);
   const [loadingPages, setLoadingPages] = useState(false);
   const [pagesError, setPagesError] = useState('');
+  const [pagesWarnings, setPagesWarnings] = useState<string[]>([]);
   const [instagramAccounts, setInstagramAccounts] = useState<InstagramAccountItem[]>([]);
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
@@ -46,6 +47,7 @@ export default function ConnectionsPage() {
   const fetchFacebookPages = async () => {
     setLoadingPages(true);
     setPagesError('');
+    setPagesWarnings([]);
     setSelectedPages([]);
     setModalType('facebook');
     try {
@@ -53,6 +55,7 @@ export default function ConnectionsPage() {
       const data = await res.json();
       if (res.ok) {
         setPages(data.pages || []);
+        setPagesWarnings(data.warnings || []);
       } else {
         setPages([]);
         setPagesError(data.error || 'No se pudieron obtener las páginas de Facebook.');
@@ -281,9 +284,30 @@ export default function ConnectionsPage() {
               </div>
             ) : (
               <>
-                <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
-                  Hemos detectado las siguientes páginas asociadas a tu cuenta. Marca aquellas que deseas administrar desde esta plataforma.
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                  {pages.length > 0
+                    ? `Detectamos ${pages.length} ${pages.length === 1 ? 'Página' : 'Páginas'} asociadas a tu cuenta. Marcá aquellas que quieras administrar desde esta plataforma.`
+                    : 'Hemos detectado las siguientes páginas asociadas a tu cuenta. Marca aquellas que deseas administrar desde esta plataforma.'}
                 </p>
+
+                {pagesWarnings.length > 0 && (
+                  <div style={{ marginBottom: '1.25rem', padding: '0.875rem 1rem', borderRadius: 'var(--radius-md)', border: '1px solid #f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {pagesWarnings.map((warning) => (
+                      <div key={warning} style={{ fontSize: '0.8125rem', color: '#fbbf24', lineHeight: 1.4 }}>
+                        {warning}
+                      </div>
+                    ))}
+                    <a
+                      href="https://www.facebook.com/settings?tab=business_tools"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ fontSize: '0.8125rem', color: 'var(--primary-color)', fontWeight: 500 }}
+                    >
+                      Revisar Páginas autorizadas en Facebook →
+                    </a>
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '300px', overflowY: 'auto', marginBottom: '1.5rem' }}>
                   {pages.map((page) => (
                     <label key={page.id} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem', backgroundColor: 'var(--sidebar-bg)', borderRadius: 'var(--radius-md)', cursor: 'pointer', border: selectedPages.includes(page.id) ? '1px solid var(--primary-color)' : '1px solid var(--border-color)'}}>
