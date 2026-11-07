@@ -44,13 +44,32 @@ Abre `http://localhost:3000`.
 | `SCHEDULER_ENABLED` | No | `false` desactiva el scheduler interno; `true` lo fuerza en desarrollo. |
 | `PUBLISH_INTERVAL_SECONDS` | No | Intervalo del scheduler interno en segundos (default `60`, mínimo `15`). |
 | `FACEBOOK_GRAPH_VERSION` | No | Versión de la Graph API (default `v23.0`). |
+| `LEGAL_CONTACT_EMAIL` | No | Email de contacto que muestran `/privacy` y `/data-deletion` (default `soporte@pixeldesarrollo.com`). |
+| `NEXT_PUBLIC_APP_NAME` | No | Nombre visible en las páginas legales (default `Metricool Clone`). |
 
 En la app de Meta, configura la redirect URI de OAuth valida:
 `https://<tu-dominio>/api/auth/callback/facebook`.
 
-Permisos solicitados: `email`, `public_profile`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`.
+Permisos solicitados: `email`, `public_profile`, `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`.
+
+`business_management` se pide porque sin él las Páginas que están dentro de un Business Portfolio pueden no aparecer en `/me/accounts`.
 
 Los permisos de Instagram (`instagram_basic`, `instagram_content_publish`) deben agregarse también en el panel de la app de Meta; mientras la app esté en modo *Development* solo funcionan para usuarios con rol en la app. Si ya habías iniciado sesión antes de agregarlos, hay que cerrar sesión y volver a entrar con Facebook para autorizarlos.
+
+### Páginas que no aparecen al importar
+
+El diálogo de Facebook Login pide autorización **por Página** (checkboxes). Si no se tildan todas, la Graph API solo devuelve las tildadas. Para volver a elegirlas: eliminar la app en <https://www.facebook.com/settings?tab=business_tools> y loguearse de nuevo. Si aun así faltan, verificar que el usuario tenga rol de Administrador o Editor sobre la Página (los accesos parciales de Business Manager no alcanzan).
+
+### Pasar la app a producción (usuarios fuera de los roles)
+
+1. Completar en *App Settings → Basic*: dominios, Privacy Policy URL (`/privacy`), Terms of Service URL, User Data Deletion (`/data-deletion`), ícono y categoría.
+2. Verificar el negocio en Meta Business Suite.
+3. En *App Review → Permissions and features* pedir **Advanced Access** para `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic` e `instagram_content_publish` (cada uno pide descripción y screencast del flujo).
+4. Cambiar el switch de la app a **Live**.
+5. Los usuarios existentes deben cerrar sesión y volver a entrar para autorizar los permisos nuevos.
+
+Las páginas `/privacy` y `/data-deletion` son públicas y sirven como URLs legales en la configuración de Meta; el email de contacto se configura con `LEGAL_CONTACT_EMAIL`.
+
 
 ## Base de datos
 
