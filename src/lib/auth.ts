@@ -12,8 +12,9 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.FACEBOOK_CLIENT_SECRET || "",
       authorization: {
         params: {
-          // Solicitamos permisos para ver y administrar las páginas
-          scope: "email,public_profile,pages_show_list,pages_read_engagement,pages_manage_posts",
+          // Permisos de páginas e Instagram (cuentas Business/Creator vinculadas a una Página)
+          scope:
+            "email,public_profile,pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish",
         },
       },
     }),

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
 
 export async function PATCH(
   req: Request,
@@ -33,7 +34,7 @@ export async function PATCH(
 
     if (post.status === "PUBLISHED") {
       return NextResponse.json(
-        { error: "El post ya fue publicado en Facebook" },
+        { error: "El post ya fue publicado" },
         { status: 409 }
       );
     }
@@ -62,7 +63,25 @@ export async function PATCH(
     }
 
     if (Array.isArray(mediaUrls)) {
-      data.mediaUrls = mediaUrls.filter((media): media is string => typeof media === "string");
+      data.mediaUrls = mediaUrls.filter(
+        (media): media is string => typeof media === "string" && /^https?:\/\//i.test(media)
+      );
+    }
+
+    const profile = await prisma.socialProfile.findUnique({
+      where: { id: post.socialProfileId },
+    });
+
+    const finalMedia = data.mediaUrls ?? post.mediaUrls;
+
+    if (profile?.platform === INSTAGRAM_PLATFORM && finalMedia.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Instagram requiere al menos una imagen o video: agregá la URL pública del medio.",
+        },
+        { status: 400 }
+      );
     }
 
     // Reprogramar un post fallido reinicia el contador de intentos.

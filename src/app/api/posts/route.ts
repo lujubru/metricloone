@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
 
 export async function GET() {
   try {
@@ -57,12 +58,29 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Perfil no encontrado" }, { status: 404 });
     }
 
+    const cleanMediaUrls = Array.isArray(mediaUrls)
+      ? mediaUrls.filter(
+          (m: unknown): m is string => typeof m === "string" && /^https?:\/\//i.test(m)
+        )
+      : [];
+
+    // Instagram no permite publicaciones sin imagen o video.
+    if (profile.platform === INSTAGRAM_PLATFORM && cleanMediaUrls.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Instagram requiere al menos una imagen o video: agregá la URL pública del medio.",
+        },
+        { status: 400 }
+      );
+    }
+
     const post = await prisma.post.create({
       data: {
         userId,
         socialProfileId,
         content: content.trim(),
-        mediaUrls: Array.isArray(mediaUrls) ? mediaUrls.filter((m: unknown) => typeof m === "string") : [],
+        mediaUrls: cleanMediaUrls,
         scheduledFor: new Date(scheduledFor),
         status: "SCHEDULED",
       },

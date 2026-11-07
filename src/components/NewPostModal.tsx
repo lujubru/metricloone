@@ -24,6 +24,9 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const selectedProfile = profiles.find((p) => p.id === socialProfileId);
+  const needsMedia = selectedProfile?.platform === 'instagram_business';
+
   useEffect(() => {
     let ignore = false;
 
@@ -65,6 +68,12 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
       .split(',')
       .map((u) => u.trim())
       .filter(Boolean);
+
+    if (needsMedia && urlList.length === 0) {
+      setSaving(false);
+      setError('Instagram necesita al menos una imagen o video: agregá la URL pública del medio.');
+      return;
+    }
 
     try {
       const res = await fetch('/api/posts', {
@@ -127,7 +136,7 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
               <option value="" disabled>Selecciona un perfil</option>
               {profiles.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.username || p.profileId} ({p.platform})
+                  {p.username || p.profileId} · {p.platform === 'facebook_page' ? 'Facebook' : p.platform === 'instagram_business' ? 'Instagram' : p.platform}
                 </option>
               ))}
             </select>
@@ -136,7 +145,7 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
         {!loadingProfiles && profiles.length === 0 && (
           <div style={{ fontSize: '0.8125rem', color: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
-            No hay páginas conectadas todavía. Andá a <a href="/connections" style={{ color: 'inherit', fontWeight: 600 }}>Conexiones</a> e importá una Página de Facebook.
+            No hay perfiles conectados todavía. Andá a <a href="/connections" style={{ color: 'inherit', fontWeight: 600 }}>Conexiones</a> e importá una Página de Facebook o una cuenta de Instagram.
           </div>
         )}
 
@@ -181,12 +190,15 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>URLs de medios (opcional, separadas por coma)</label>
+          <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>
+            URLs de medios {needsMedia ? '(obligatorio para Instagram)' : '(opcional, separadas por coma)'}
+          </label>
           <input
             type="text"
             value={mediaUrls}
             onChange={(e) => setMediaUrls(e.target.value)}
             placeholder="https://..."
+            required={needsMedia}
             style={{
               padding: '0.6rem 0.75rem',
               borderRadius: 'var(--radius-md)',
@@ -195,6 +207,11 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
               color: 'var(--text-primary)',
             }}
           />
+          {needsMedia && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Instagram no permite publicaciones solo de texto. Usá una imagen JPG pública (hasta 10 para carrusel) o un MP4/MOV para Reels.
+            </span>
+          )}
         </div>
 
         {error && <div style={{ color: '#ef4444', fontSize: '0.875rem' }}>{error}</div>}

@@ -31,7 +31,7 @@ export class FacebookApiError extends Error {
   }
 }
 
-async function graphRequest<T>(path: string, body?: Record<string, string>): Promise<T> {
+export async function graphRequest<T>(path: string, body?: Record<string, string>): Promise<T> {
   let res: Response;
 
   try {

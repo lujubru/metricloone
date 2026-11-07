@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { FacebookApiError, publishToFacebookPage } from "./facebook";
+import { INSTAGRAM_PLATFORM, publishToInstagram } from "./instagram";
 
 /** Intentos totales antes de marcar el post como FAILED definitivo. */
 const MAX_ATTEMPTS = 3;
@@ -57,19 +58,30 @@ function errorMessage(error: unknown) {
 }
 
 async function send(post: PublishablePost) {
-  if (post.socialProfile.platform !== "facebook_page") {
-    throw new PublishFailure(
-      `La plataforma "${post.socialProfile.platform}" no soporta publicación automática todavía.`,
-      false
-    );
+  const { platform, profileId, accessToken } = post.socialProfile;
+
+  if (platform === "facebook_page") {
+    return publishToFacebookPage({
+      pageId: profileId,
+      accessToken,
+      message: post.content,
+      mediaUrls: post.mediaUrls,
+    });
   }
 
-  return publishToFacebookPage({
-    pageId: post.socialProfile.profileId,
-    accessToken: post.socialProfile.accessToken,
-    message: post.content,
-    mediaUrls: post.mediaUrls,
-  });
+  if (platform === INSTAGRAM_PLATFORM) {
+    return publishToInstagram({
+      igUserId: profileId,
+      accessToken,
+      caption: post.content,
+      mediaUrls: post.mediaUrls,
+    });
+  }
+
+  throw new PublishFailure(
+    `La plataforma "${platform}" no soporta publicación automática todavía.`,
+    false
+  );
 }
 
 /**

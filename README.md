@@ -7,7 +7,7 @@ Clon funcional (MVP) de Metricool: panel para conectar perfiles sociales, planif
 | Sección | Estado | Descripción |
 | --- | --- | --- |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
-| `/connections` | OK | Conexión vía Facebook Login (OAuth) y selección de Páginas para guardarlas como perfiles sociales. |
+| `/connections` | OK | Conexión vía Facebook Login (OAuth), selección de Páginas de Facebook y de cuentas de Instagram Business vinculadas a esas Páginas. |
 | `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Muestra el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
 | `/settings` | OK | Datos de la sesión, cierre de sesión y desconexión de perfiles. |
 | `/smartlink` | WIP | Constructor de página "link in bio". Solo estado en cliente (sin persistencia). |
@@ -48,7 +48,9 @@ Abre `http://localhost:3000`.
 En la app de Meta, configura la redirect URI de OAuth valida:
 `https://<tu-dominio>/api/auth/callback/facebook`.
 
-Permisos solicitados: `email`, `public_profile`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`.
+Permisos solicitados: `email`, `public_profile`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`.
+
+Los permisos de Instagram (`instagram_basic`, `instagram_content_publish`) deben agregarse también en el panel de la app de Meta; mientras la app esté en modo *Development* solo funcionan para usuarios con rol en la app. Si ya habías iniciado sesión antes de agregarlos, hay que cerrar sesión y volver a entrar con Facebook para autorizarlos.
 
 ## Base de datos
 
@@ -67,22 +69,34 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/auth/[...nextauth]` | GET/POST | Login/logout con Facebook. |
 | `/api/facebook/pages` | GET | Lista las Páginas del usuario autenticado en Facebook. |
 | `/api/facebook/save-pages` | POST | Guarda las Páginas seleccionadas como `SocialProfile`. |
+| `/api/instagram/accounts` | GET | Lista las cuentas de Instagram Business vinculadas a las Páginas del usuario (no expone tokens). |
+| `/api/instagram/save-accounts` | POST | Guarda las cuentas de Instagram seleccionadas como `SocialProfile` (`instagram_business`). |
 | `/api/profiles` | GET | Perfiles conectados del usuario. |
 | `/api/profiles/[id]` | DELETE | Desconecta un perfil. |
 | `/api/posts` | GET/POST | Lista y crea publicaciones. |
 | `/api/posts/[id]` | PATCH/DELETE | Reprograma (y reinicia intentos) o elimina una publicación. |
-| `/api/posts/[id]/publish` | POST | Publica el post inmediatamente en la Página de Facebook. |
+| `/api/posts/[id]/publish` | POST | Publica el post inmediatamente en la red del perfil (Página de Facebook o cuenta de Instagram). |
 | `/api/cron/publish` | GET/POST | Publica los posts vencidos. Requiere `Authorization: Bearer $CRON_SECRET`. |
 
 ## Publicación automática
 
-Los posts con estado `SCHEDULED` cuya `scheduledFor` ya pasó se envían a la Página de Facebook mediante la Graph API (`src/lib/facebook.ts` + `src/lib/publisher.ts`):
+Los posts con estado `SCHEDULED` cuya `scheduledFor` ya pasó se envían a la red del perfil asociado mediante la Graph API (`src/lib/facebook.ts`, `src/lib/instagram.ts` y `src/lib/publisher.ts`). Para Páginas de Facebook:
 
 - sin media -> `POST /{page-id}/feed`,
 - 1 media -> `POST /{page-id}/photos`,
 - varias medias -> fotos con `published=false` y luego `/feed` con `attached_media`.
 
 Cada post pasa por `SCHEDULED -> PUBLISHING -> PUBLISHED | FAILED`. La toma del post es atómica (`updateMany` con `status: "SCHEDULED"`), por lo que varios workers o el scheduler interno más el cron externo nunca publican dos veces el mismo post. Los errores de red/5xx/rate-limit se reintentan hasta 3 veces (`attempts`); los de token o permisos (`190`, `100`, `200`) fallan de inmediato y quedan visibles en `/planning` junto al botón de reintento.
+
+### Instagram
+
+Las cuentas de Instagram Business/Creator se publican con la Instagram Graph API usando el token de la Página a la que están vinculadas (`src/lib/instagram.ts`):
+
+- 1 imagen -> `POST /{ig-user-id}/media` con `image_url` + `caption`,
+- 1 video (MP4/MOV) -> `media_type=REELS` con `video_url`,
+- 2 a 10 medios -> contenedores hijos (`is_carousel_item=true`) y luego `media_type=CAROUSEL`.
+
+Después de crear el contenedor se consulta `status_code` hasta `FINISHED` (los videos tardan) y se publica con `media_publish`. Instagram **no permite publicaciones sin media**: la API rechaza el post y el formulario lo avisa antes de programar.
 
 Existen dos disparadores, y puedes usar uno, otro o ambos:
 

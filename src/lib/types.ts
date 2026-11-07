@@ -34,3 +34,12 @@ export type FacebookPage = {
   access_token: string;
   category?: string;
 };
+
+export type InstagramAccountItem = {
+  id: string;
+  username: string;
+  profilePictureUrl: string | null;
+  followersCount: number | null;
+  pageId: string;
+  pageName: string;
+};
