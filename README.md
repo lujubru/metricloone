@@ -2,6 +2,25 @@
 
 Clon funcional (MVP) de Metricool: panel para conectar perfiles sociales, planificar publicaciones y administrar enlaces, construido con **Next.js 16 (App Router)**, **NextAuth v4**, **Prisma** y **PostgreSQL**.
 
+## Estado de producción
+
+| Dato | Valor |
+| --- | --- |
+| URL | <https://metricool.pixeldesarrollo.com> |
+| Hosting | Coolify (Application -> Dockerfile, rama `main`, puerto `3000`) |
+| Base de datos | PostgreSQL en **Railway** (externa a Coolify) |
+| Login | email + contraseña (`/login`), roles `ADMIN` / `CLIENT` |
+| Multi-tenant | activo desde el commit `d147457` (deploy verificado el 7/11/2026) |
+
+Flujo de uso en producción:
+
+1. El **ADMIN** entra a `/login` y desde `/admin` crea una cuenta por cliente (nombre, email, contraseña, App ID y App Secret de Facebook).
+2. Cada cliente agrega en **su** app de Meta la redirect URI `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
+3. El cliente entra a `/login` desde cualquier equipo con el email y la contraseña que le asignó el ADMIN, conecta su Facebook en `/connections` e importa Páginas e Instagram.
+4. Todo (perfiles, posts, tokens) queda aislado por `tenantId`; el ADMIN no ve los datos de un cliente en el dashboard salvo que entre con el usuario de ese cliente.
+
+> **Secretos críticos.** `NEXTAUTH_SECRET` invalida las sesiones si cambia y `APP_ENCRYPTION_KEY` hace ilegibles los App Secret guardados (habría que volver a cargarlos desde `/admin`). Se generan una vez y no se rotan.
+
 ## Funcionalidad
 
 | Sección | Estado | Descripción |
@@ -175,20 +194,112 @@ El repo incluye un `Dockerfile` multi-stage (Node 20 Alpine) que:
 
 1. instala dependencias con `npm ci` (incluye dev deps para `prisma generate`),
 2. compila la app con `npm run build`,
-3. en el arranque ejecuta `npx prisma migrate deploy && npm start` en el puerto `3000`.
+3. copia a la imagen final `.next`, `public`, `prisma`, `scripts` y `next.config.ts`,
+4. en el arranque ejecuta `npx prisma migrate deploy && npm start` en el puerto `3000`.
 
-En Coolify:
+> La carpeta `scripts` **debe** copiarse a la imagen final: sin ella `npm run db:bootstrap` falla con `Cannot find module '/app/scripts/bootstrap-admin.mjs'`.
 
-1. Crea un recurso **Application -> Dockerfile** apuntando a este repositorio (rama `main`), puerto `3000`.
-2. Añade las variables de entorno de la tabla anterior, con `NEXTAUTH_URL` = dominio público.
-3. Usa la URL pública (o interna si está en la misma red) de tu PostgreSQL como `DATABASE_URL`.
-4. Despliega; las migraciones se aplican automáticamente en el arranque.
-5. La primera vez, crea el administrador ejecutando `npm run db:bootstrap` dentro del contenedor (Coolify → Terminal) con `ADMIN_EMAIL` y `ADMIN_PASSWORD` definidos. Desde ese usuario se crean las demás cuentas en `/admin`.
-
-La publicacion automatica funciona sin configurar nada extra (scheduler interno cada 60s). Si prefieres un cron externo, desactiva el interno con `SCHEDULER_ENABLED=false` y crea una **Scheduled Task** en Coolify:
+La publicación automática funciona sin configurar nada extra (scheduler interno cada 60 s). Si preferís un cron externo, desactivá el interno con `SCHEDULER_ENABLED=false` y creá una **Scheduled Task** en Coolify:
 
 ```
-curl -fsS -X POST -H "Authorization: Bearer <CRON_SECRET>" http://<host-interno>:3000/api/cron/publish
+curl -fsS -X POST -H "Authorization: ******" http://<host-interno>:3000/api/cron/publish
 ```
 
 Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retried`, `failed` y `skipped`.
+
+### Runbook de despliegue en Coolify
+
+1. Recurso **Application -> Dockerfile** apuntando al repo (rama `main`), puerto `3000`, dominio `metricool.pixeldesarrollo.com` con HTTPS.
+2. Cargar las variables de entorno antes del primer deploy:
+
+   ```
+   DATABASE_URL=postgresql://...        # Railway (usar la URL pública/proxy)
+   NEXTAUTH_URL=https://metricool.pixeldesarrollo.com
+   NEXTAUTH_SECRET=<openssl rand -base64 32>   # no rotar
+   APP_ENCRYPTION_KEY=<32 bytes en hex>        # no rotar
+   ADMIN_EMAIL=<email del dueño>
+   ADMIN_PASSWORD=<mínimo 8 caracteres>
+   ADMIN_NAME=<nombre visible>
+   SCHEDULER_ENABLED=true
+   ```
+
+   `FACEBOOK_CLIENT_ID` / `FACEBOOK_CLIENT_SECRET` **ya no se usan** (cada tenant tiene su propia app) y `CRON_SECRET` sólo hace falta si se usa el cron externo.
+
+   Para generar la clave de cifrado:
+
+   ```powershell
+   $b = New-Object byte[] 32
+   (New-Object System.Security.Cryptography.RNGCryptoServiceProvider).GetBytes($b)
+   -join ($b | ForEach-Object { $_.ToString('x2') })
+   ```
+
+3. **Deploy**. El arranque aplica las migraciones pendientes (`prisma migrate deploy`); en el primer deploy sobre la base vieja la migración `20261107130000_multi_tenant` crea el tenant `principal`, pasa los usuarios existentes a `ADMIN` y asigna `tenantId` a los perfiles y posts existentes. No se pierde información.
+4. Una sola vez, en **Coolify -> Terminal** del contenedor:
+
+   ```bash
+   npm run db:bootstrap
+   ```
+
+   Es idempotente: crea el ADMIN o le resetea la contraseña y el rol. Si el terminal sigue mostrando la instancia anterior, cerrarlo y reabrirlo después del deploy.
+5. Verificación mínima:
+   - `GET /api/auth/providers` devuelve **sólo** `credentials`.
+   - `/login` responde 200 y `/connections` sin sesión redirige a `/login?callbackUrl=...`.
+   - Login con `ADMIN_EMAIL` -> `/admin` lista la cuenta *principal* -> se le cargan App ID/Secret -> `/connections` conecta Facebook, importa Páginas e Instagram -> se crea y publica un post.
+
+### Alta de un cliente nuevo (checklist)
+
+1. En Meta for Developers, crear la app del cliente (tipo *Business*) y agregar el producto *Facebook Login*.
+2. En *Facebook Login -> Settings -> Valid OAuth Redirect URIs*: `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
+3. En *App Settings -> Basic*: Privacy Policy `https://metricool.pixeldesarrollo.com/privacy`, Data Deletion `https://metricool.pixeldesarrollo.com/data-deletion`, ícono PNG **sin canal alfa**. En *Terms of Service* no hay página propia todavía: repetir la URL de `/privacy` o crear `/terms` (el proxy ya la tiene como ruta pública).
+4. En `/admin` -> *Crear cuenta*: nombre, email, contraseña, App ID y App Secret. (Si más adelante cambia el secret, se actualiza con el botón de credenciales de esa tarjeta.)
+5. Enviar al cliente la URL de login y sus credenciales. Con la app en modo *Development* necesita figurar como Administrador/Desarrollador/Tester de la app; si no, hay que publicarla (ver *Pasar la app de un cliente a producción*).
+
+## Problemas conocidos y soluciones
+
+Casos reales encontrados durante el despliegue y la puesta en marcha:
+
+| Síntoma | Causa | Solución |
+| --- | --- | --- |
+| Coolify: `ERROR: Repository not found` / `Could not read from remote repository` | La deploy key del recurso no tiene acceso a ese repositorio (o se reutilizó una key de otra app). | Usar una key propia del recurso o una GitHub App con acceso al repo. |
+| `P3005 The database schema is not empty` al desplegar | La base tenía tablas sin historial de migraciones (creadas con `db push`). | Hacer *baseline* con `prisma migrate resolve --applied <migración>` o, si los datos no importan, vaciar la base. **Nunca** borrar tablas en producción sin confirmar. |
+| `Cannot find module '/app/scripts/bootstrap-admin.mjs'` | La imagen final no incluía `scripts/`. | Copiar `scripts` en el `Dockerfile` (ya corregido en `aed1de7`). |
+| Meta rechaza el ícono de la app | El PNG tenía canal alfa (`colorType=6`). | Exportarlo en truecolor sin alfa (`colorType=2`). El archivo bueno es `public/app-icon-1024.png`. |
+| Al importar sólo aparecen algunas Páginas de Facebook | El diálogo de Login autoriza Página por Página y/o el token es anterior a los permisos actuales. | Ver *Páginas que no aparecen al importar*. |
+| Instagram no muestra cuentas | No hay cuentas Business/Creator vinculadas a las Páginas **ya conectadas**, o falta `instagram_basic`. | Conectar primero la Página en `/connections` y reconectar Facebook para autorizar el permiso. |
+| "Se produjo un error. Actualiza la página o cierra y vuelve a abrir la ventana del navegador" al subir una imagen | Es un error genérico del SDK de Facebook dentro del modal de publicación. | Recargar y reintentar; si persiste, revisar la consola del navegador y los scopes del token. |
+
+## Notas de desarrollo (Next.js 16 / ESLint)
+
+Cosas que no son obvias y conviene recordar antes de tocar el código:
+
+- **No hay `middleware.ts`**: el guard de sesión vive en `src/proxy.ts` (función exportada `proxy`, `config.matcher`, runtime Node por defecto). Las rutas públicas están en `PUBLIC_PATHS`.
+- **`cookies()` es asíncrono** (`await cookies()`) en route handlers.
+- **`useSearchParams()` exige un `<Suspense>`** alrededor del componente que lo usa, si no el build falla. En este repo se resuelve con un wrapper: `LoginPage` / `ConnectionsPage`.
+- **Regla `react-hooks/set-state-in-effect`** (error en Next 16): detecta `setState` de forma transitiva a través de funciones llamadas desde el cuerpo del `useEffect`. Patrones usados para evitarla: derivar estado en render en lugar de sincronizarlo, y diferir el fetch inicial con `queueMicrotask(...)` (ver `src/app/admin/page.tsx`).
+- **`User` no tiene `createdAt`**: cualquier `orderBy`/`select` sobre `User` debe usar `name`; usar `createdAt` rompe los tipos de Prisma con un error confuso.
+- **El `tenantId` sale siempre del JWT**, nunca del body; `/api/facebook/save-pages` y `/api/instagram/save-accounts` revalidan contra la Graph API antes de guardar.
+- El scheduler interno (`src/instrumentation.ts`) publica para **todos** los tenants; se apaga con `SCHEDULER_ENABLED=false` y no corre durante el build.
+
+Validación local antes de pushear:
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+## Hitos del proyecto
+
+| Commit | Qué agregó |
+| --- | --- |
+| `c095bdd` | Ícono de app y favicons. |
+| `9992524` | Paginación completa de Páginas, Business Portfolio y aviso de permisos faltantes. |
+| `d147457` | Arquitectura multi-tenant: login propio, credenciales de Meta por cliente, OAuth por tenant, panel `/admin`, Instagram derivado de las Páginas. |
+| `aed1de7` | Copia de `scripts/` a la imagen final para poder correr `db:bootstrap` en el contenedor. |
+
+## Pendientes
+
+- `/smartlink` (constructor de link-in-bio) y `/inbox` siguen siendo maquetas sin persistencia.
+- Crear la página `/terms` si Meta la exige (el proxy ya la trata como pública).
+- Rotar la contraseña de PostgreSQL de Railway: circuló en texto plano durante la puesta en marcha.
+- Al conectar cuentas de Instagram de clientes, probar el flujo completo de publicación (hasta ahora validado sólo con la cuenta del dueño).
