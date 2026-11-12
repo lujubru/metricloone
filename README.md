@@ -232,7 +232,7 @@ Límites y formatos aceptados están centralizados en `src/lib/media.ts` y `src/
 `/inbox` es una bandeja de dos paneles que unifica **comentarios** y **mensajes directos** de las Páginas de Facebook y las cuentas de Instagram Business conectadas en `/connections`.
 
 - Panel izquierdo: hilos con avatar de iniciales, red, tipo, badge de no leídos y extracto del último mensaje. Filtros por red, tipo y «sólo sin leer».
-- Panel derecho: conversación completa con burbujas `INBOUND` / `OUTBOUND`, adjuntos como enlaces y caja de respuesta.
+- Panel derecho: conversación completa con burbujas `INBOUND` / `OUTBOUND`, adjuntos como enlaces y, al pie, el botón para responder en la red social (ver *Responder desde la bandeja*).
 - Al abrir un hilo se marca leído (`PATCH /api/inbox/[id]`) y se descuenta del contador global.
 - Botón **Actualizar** -> `POST /api/inbox/sync` (importa lo que ya existe) y botón **Webhooks** -> `GET /api/inbox/setup` (diagnóstico de la configuración en Meta).
 
@@ -262,6 +262,8 @@ La UI **no envía respuestas**: Meta restringe el envío de mensajes desde aplic
 
 El IGSID no es una URL, por eso el DM de Instagram depende del `username` del participante (que la sincronización de conversaciones sí trae).
 
+**Estado en producción** (`metricool.pixeldesarrollo.com`, verificado el 2026-11-12): el webhook entrega comentarios y mensajes directos de Facebook e Instagram en tiempo real y el botón abre la conversación correcta en cada red. Es el flujo definitivo: no hay que reactivar el envío desde la UI.
+
 El endpoint `POST /api/inbox/[id]/reply` sigue existiendo y es funcional, pero la interfaz ya no lo usa. Lo que hace, por si se reactiva:
 
 - **Mensaje directo**: `POST /{cuenta}/messages` con `recipient` y `messaging_type: RESPONSE`. Con un token de Página el dueño de la conversación es la **Página** (`parentProfileId`), así que ese id se prueba primero y después el de la cuenta (`profileId`). Sólo se corta ante un error del token (`190`/`200`): un `10` puede deberse al nodo elegido y merece el segundo intento.
@@ -269,7 +271,7 @@ El endpoint `POST /api/inbox/[id]/reply` sigue existiendo y es funcional, pero l
 - Si `participantExternalId` coincide con uno de nuestros propios ids (cuenta o Página), el envío se aborta con un mensaje claro en lugar de mandar el DM a nosotros mismos.
 - **Comentario**: en Facebook `POST /{comment-id}/comments`, en Instagram `POST /{comment-id}/replies`. Se intenta primero la ruta de la plataforma y se cae a la otra ante un `100`.
 
-La respuesta se guarda como mensaje `OUTBOUND` con `upsert` sobre `externalId` (el eco del webhook puede llegar antes de que termine la request) y la UI recarga el hilo y la lista. Los rechazos de Meta se muestran en el banner con el mensaje original y quedan en el log del servidor junto al `code` de la Graph API.
+La respuesta se guarda como mensaje `OUTBOUND` con `upsert` sobre `externalId` (el eco del webhook puede llegar antes de que termine la request) y quien invoque el endpoint obtiene el hilo actualizado. Los rechazos de Meta se devuelven con el mensaje original y quedan en el log del servidor junto al `code` de la Graph API.
 
 ### Configurar el webhook en Meta (una vez por app de cliente)
 
@@ -376,8 +378,8 @@ Casos reales encontrados durante el despliegue y la puesta en marcha:
 | El **Inbox** no recibe nada | Falta configurar el webhook, o el token guardado es anterior a los permisos de mensajería. | Definir `META_WEBHOOK_VERIFY_TOKEN`, cargar la Callback URL y el Verify token en la app de Meta, y reconectar Facebook para autorizar `pages_messaging` / `pages_read_user_content` / `instagram_manage_*`. Mientras tanto se puede forzar con *Actualizar*. |
 | `GET /api/webhooks/meta` devuelve 500 | `META_WEBHOOK_VERIFY_TOKEN` no está definida en el entorno. | Cargarla y redeployar; el setup en `/inbox` -> *Webhooks* lo muestra como `verifyTokenConfigured: false`. |
 | Llegan comentarios pero no mensajes directos (o al revés) | Permisos parciales en el token o campos no suscriptos en la Página. | Revisar `GET /api/inbox/setup` (qué campos faltan por cuenta) y el banner de `POST /api/inbox/sync`. |
-| Se escribe una respuesta pero **no se envía** | La UI ya no envía: Meta rechaza los DM con `(#10) fuera del período permitido` aunque el contacto acabe de escribir. | Usar el botón *Abrir en Instagram / Facebook* y responder en la red social. El endpoint `POST /api/inbox/[id]/reply` sigue disponible para reactivar el envío. |
-| *Fuera del período permitido* respondiendo a un mensaje **recién recibido** | Meta usa el mismo `code 10` cuando el nodo emisor no es dueño de la conversación. Antes se probaba primero el id de la cuenta de Instagram y el error de ventana cortaba el bucle, así que nunca se llegaba a la Página. | Ya corregido: se prueban Página y cuenta, y el fallo por ventana también pasa al siguiente id. Si persiste, apretar *Actualizar* para reingerir el hilo y revisar el `participantExternalId`. |
+| No aparece la caja para escribir en un hilo | Es el comportamiento actual: la bandeja no envía respuestas, sólo abre la conversación en la red social. | Usar el botón *Abrir en Instagram / Facebook*. Para habilitar el envío habría que reactivar `POST /api/inbox/[id]/reply` en la UI y resolver antes la ventana de mensajería de Meta. |
+| *Fuera del período permitido* respondiendo a un mensaje **recién recibido** | Meta usa el mismo `code 10` cuando el nodo emisor no es dueño de la conversación o falta `pages_messaging` / `instagram_manage_messages`; en producción el rechazo aparecía incluso con el contacto escribiendo en ese momento. | Fue lo que motivó el cambio de enfoque: la bandeja ya no envía y abre la conversación en la red social. El endpoint mantiene el orden Página → cuenta y el reintento con `HUMAN_AGENT` por si se reactiva. |
 | Aviso «Meta no aceptó los webhooks …» en un solo campo | Ese campo no aplica al objeto suscripto o el producto de Messenger no está habilitado en la app. | Sólo son bloqueantes si falta `feed`/`messages` (Página) o `comments`/`messages` (Instagram). Los demás son opcionales para la bandeja. |
 
 ## Notas de desarrollo (Next.js 16 / ESLint)
@@ -411,12 +413,12 @@ npm run build
 | `4f6230b` | Subida de imágenes y videos (varios por publicación) y elección entre Publicación e Historia. |
 | `e93845d` | Calendario: vistas Día/Semana/Mes, filtros funcionales y fix del botón «Nuevo post» del topbar. |
 | `4ae4d3a` | Inbox: los DM se envían desde la Página y un `code 10` ya no corta el reintento con `HUMAN_AGENT`. |
-| `2b97a1c` | Inbox: la bandeja deja de enviar respuestas y abre la conversación en la red social (*Abrir en Instagram / Facebook*). |
+| `2b97a1c` | Inbox: la bandeja deja de enviar respuestas y abre la conversación en la red social (*Abrir en Instagram / Facebook*). Desplegado y validado en producción. |
 
 ## Pendientes
 
 - `/smartlink` (constructor de link-in-bio) sigue siendo una maqueta sin persistencia.
-- Inbox: probar el webhook con eventos reales de Meta (comentarios y DMs de Facebook e Instagram) y ajustar los shapes si difieren. El envío desde la bandeja está desactivado en la UI (se responde en la red social) y el endpoint de respuesta sólo admite texto, sin adjuntos.
+- Inbox: el endpoint de respuesta sólo admite texto (sin adjuntos) y no lo usa la UI; si Meta habilita el envío desde apps externas habría que reactivarlo con el flujo de ventana de mensajería resuelto.
 - Crear la página `/terms` si Meta la exige (el proxy ya la trata como pública).
 - Rotar la contraseña de PostgreSQL de Railway: circuló en texto plano durante la puesta en marcha.
 - Al conectar cuentas de Instagram de clientes, probar el flujo completo de publicación (hasta ahora validado sólo con la cuenta del dueño).
