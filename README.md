@@ -383,7 +383,7 @@ npm run build
 | `aed1de7` | Copia de `scripts/` a la imagen final para poder correr `db:bootstrap` en el contenedor. |
 | `4f6230b` | Subida de imágenes y videos (varios por publicación) y elección entre Publicación e Historia. |
 | `e93845d` | Calendario: vistas Día/Semana/Mes, filtros funcionales y fix del botón «Nuevo post» del topbar. |
-| Inbox | Modelos `InboxThread`/`InboxMessage`, webhook de Meta con verificación HMAC multi-tenant, sync manual, respuestas y bandeja real en `/inbox`. |
+| `a6bed06` | Inbox: modelos `InboxThread`/`InboxMessage`, webhook de Meta con verificación HMAC multi-tenant, sync manual, respuestas y bandeja real en `/inbox`. |
 
 ## Pendientes
 
