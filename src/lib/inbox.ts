@@ -400,8 +400,15 @@ async function ingestConversations(
   summary: InboxSyncSummary
 ) {
   for (const conversation of conversations) {
+    // El interlocutor nunca es una cuenta nuestra: en Instagram la lista de
+    // participantes trae tanto la cuenta como la Página que la gestiona.
+    const ownIds = new Set(
+      [profile.profileId, profile.parentProfileId].filter(
+        (value): value is string => Boolean(value)
+      )
+    );
     const participant = conversation.participants?.data?.find(
-      (item) => item.id && item.id !== profile.profileId
+      (item) => item.id && !ownIds.has(item.id)
     );
 
     // Se usa el id del interlocutor como clave del hilo (y no el id interno de
@@ -414,7 +421,7 @@ async function ingestConversations(
       // En Instagram el `from.id` de las conversaciones no siempre es el id de
       // la cuenta, así que se compara también por username cuando existe.
       const isOwn =
-        message.from?.id === profile.profileId ||
+        ownIds.has(message.from?.id ?? "") ||
         (Boolean(profile.username) && message.from?.username === profile.username);
 
       await ingestInboxMessage({
@@ -635,11 +642,21 @@ export async function sendInboxReply({
     }
 
     let lastError: FacebookApiError | null = null;
+    const targets = parentCandidates(thread.socialProfile);
 
-    // Los DM se mandan contra la cuenta dueña del token; en Instagram con token
-    // de Página el id válido puede ser el de la Página y no el de la cuenta, así
-    // que se prueban ambos. Un 100 significa "objeto inválido para esta ruta".
-    for (const target of parentCandidates(thread.socialProfile)) {
+    if (targets.includes(thread.participantExternalId)) {
+      throw new FacebookApiError(
+        "Este hilo apunta a nuestra propia cuenta como contacto y no a la persona. " +
+          "Actualizá la bandeja para corregir el identificador y volvé a intentar.",
+        400
+      );
+    }
+
+    // Los DM se mandan contra la cuenta dueña del token. En Instagram con token
+    // de Página el nodo válido es el de la Página, no el de la cuenta: cuando el
+    // nodo existe pero no es el dueño de la conversación Meta contesta "fuera
+    // del período permitido" en vez de 100, así que se prueban ambos.
+    for (const target of targets) {
       try {
         const data = await sendDirectMessage(target, token, thread.participantExternalId, body, {
           messaging_type: "RESPONSE",
@@ -660,12 +677,14 @@ export async function sendInboxReply({
             });
           } catch (retry) {
             if (!(retry instanceof FacebookApiError)) throw retry;
-            lastError = retry;
+            lastError = retry.code === error.code ? error : retry;
           }
         }
 
-        // Permisos (10/190/200) no se arreglan cambiando de id.
-        if (error.code !== 100) break;
+        // Un 10 (permisos o dueño de la conversación) puede deberse al id
+        // elegido, así que todavía se prueba el otro nodo. 190/200 son del token
+        // y no se arreglan cambiando de id.
+        if (error.code === 190 || error.code === 200) break;
       }
     }
 
@@ -707,15 +726,19 @@ export async function sendInboxReply({
   throw describeReplyError(lastError!);
 }
 
-/** Ids con los que se puede enviar: la cuenta y su Página vinculada, sin repetir. */
+/** Ids con los que se puede enviar: la Página vinculada primero y luego la cuenta. */
 function parentCandidates(profile: {
   profileId: string;
   parentProfileId: string | null;
 }): string[] {
-  const ids = [profile.profileId];
+  // Con un token de Página el dueño de la conversación es la Página; el id de la
+  // cuenta de Instagram no sirve como emisor (Meta responde "fuera del período
+  // permitido" en lugar de un 100 explícito).
+  const ids: string[] = [];
   if (profile.parentProfileId && profile.parentProfileId !== profile.profileId) {
     ids.push(profile.parentProfileId);
   }
+  ids.push(profile.profileId);
   return ids;
 }
 
@@ -753,9 +776,10 @@ function describeReplyError(error: FacebookApiError): FacebookApiError {
 
   if (isOutsideWindowError(error)) {
     return new FacebookApiError(
-      "Meta no permitió el envío: el contacto no escribe desde hace más de 7 días, " +
-        "así que no se puede responder ni con la etiqueta de agente humano. " +
-        "Fuera de esa ventana sólo se pueden enviar notificaciones con plantilla.",
+      "Meta rechazó el envío por la ventana de mensajería del contacto. " +
+        "Si la persona acaba de escribir, el problema es el destinatario: ese mismo error aparece " +
+        "cuando el hilo apunta a una cuenta que no es dueña de la conversación. " +
+        "Actualizá la bandeja y volvé a intentar.",
       error.status,
       error.code
     );
