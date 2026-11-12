@@ -411,7 +411,7 @@ npm run build
 | `4f6230b` | Subida de imágenes y videos (varios por publicación) y elección entre Publicación e Historia. |
 | `e93845d` | Calendario: vistas Día/Semana/Mes, filtros funcionales y fix del botón «Nuevo post» del topbar. |
 | `4ae4d3a` | Inbox: los DM se envían desde la Página y un `code 10` ya no corta el reintento con `HUMAN_AGENT`. |
-| `—` | Inbox: la bandeja deja de enviar respuestas y abre la conversación en la red social (*Abrir en Instagram / Facebook*). |
+| `2b97a1c` | Inbox: la bandeja deja de enviar respuestas y abre la conversación en la red social (*Abrir en Instagram / Facebook*). |
 
 ## Pendientes
 
