@@ -657,7 +657,8 @@ function SetupPanel({ setup, loading }: { setup: InboxSetup | null; loading: boo
           {setup.verifyTokenConfigured ? ' (configurado ✅)' : ' (falta configurarlo ⚠️)'}.
         </li>
         <li>
-          Suscribí los campos: <code>{setup.webhookFields.join(', ')}</code>.
+          Suscribí los campos de <strong>Page</strong>: <code>{setup.webhookFields.pages.join(', ')}</code> y los de{' '}
+          <strong>Instagram</strong>: <code>{setup.webhookFields.instagram.join(', ')}</code>.
         </li>
       </ol>
 

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireTenant, serverError } from "@/lib/api";
 import { graphRequest } from "@/lib/facebook";
-import { FACEBOOK_PLATFORM, WEBHOOK_FIELDS } from "@/lib/inbox";
+import {
+  FACEBOOK_PLATFORM,
+  INSTAGRAM_WEBHOOK_FIELDS,
+  PAGE_WEBHOOK_FIELDS,
+} from "@/lib/inbox";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -41,10 +45,14 @@ export async function GET(req: Request) {
 
     const accounts = await Promise.all(
       profiles.map(async (profile) => {
-        // Los comentarios y los DM de una Página se consultan con la Página, así
-        // que un perfil de Instagram se revisa a través de su Página vinculada.
-        const pageId = profile.parentProfileId || profile.profileId;
-        const canProbe = profile.platform === FACEBOOK_PLATFORM || Boolean(profile.parentProfileId);
+        // Facebook se suscribe sobre la Página; Instagram, sobre la cuenta, porque
+        // `comments` y `mentions` no existen como campos del objeto Página.
+        const isInstagram = profile.platform !== FACEBOOK_PLATFORM;
+        const objectId = isInstagram
+          ? profile.profileId
+          : profile.parentProfileId || profile.profileId;
+        const webhookFields = isInstagram ? INSTAGRAM_WEBHOOK_FIELDS : PAGE_WEBHOOK_FIELDS;
+        const canProbe = isInstagram || Boolean(profile.profileId);
 
         let subscribedFields: string[] | null = null;
         let error: string | null = null;
@@ -52,7 +60,7 @@ export async function GET(req: Request) {
         if (canProbe) {
           try {
             const data = await graphRequest<SubscribedApps>(
-              `/${pageId}/subscribed_apps?access_token=${encodeURIComponent(profile.accessToken)}`
+              `/${objectId}/subscribed_apps?access_token=${encodeURIComponent(profile.accessToken)}`
             );
             subscribedFields = data.data?.[0]?.subscribed_fields ?? [];
           } catch (cause) {
@@ -65,11 +73,12 @@ export async function GET(req: Request) {
           platform: profile.platform,
           account: profile.username ?? profile.profileId,
           profileId: profile.profileId,
+          webhookObjectId: objectId,
           subscribedFields,
           missingFields:
             subscribedFields === null
               ? null
-              : WEBHOOK_FIELDS.filter((field) => !subscribedFields?.includes(field)),
+              : webhookFields.filter((field) => !subscribedFields?.includes(field)),
           error,
         };
       })
@@ -79,7 +88,7 @@ export async function GET(req: Request) {
       callbackUrl: `${baseUrl}/api/webhooks/meta`,
       verifyTokenConfigured: Boolean(process.env.META_WEBHOOK_VERIFY_TOKEN),
       appId: tenant?.fbAppId ?? null,
-      webhookFields: WEBHOOK_FIELDS,
+      webhookFields: { pages: PAGE_WEBHOOK_FIELDS, instagram: INSTAGRAM_WEBHOOK_FIELDS },
       accounts,
     });
   } catch (error) {

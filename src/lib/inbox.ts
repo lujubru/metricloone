@@ -13,19 +13,32 @@ export const DIRECTION_OUTBOUND = "OUTBOUND";
 export const FACEBOOK_PLATFORM = "facebook_page";
 
 /**
- * Campos de webhook que se piden a la Página. El orden importa: si Meta rechaza
- * algún campo se van descartando desde el final, así los más importantes
- * (`feed` y `messages`) sobreviven.
+ * Campos de webhook del objeto Página. El orden importa: si Meta rechaza algún
+ * campo se van descartando desde el final, así los imprescindibles (`feed` y
+ * `messages`) sobreviven. `comments` y `mentions` son de Instagram y sobre la
+ * Página se rechazan, por eso no están en esta lista.
  */
-export const WEBHOOK_FIELDS: readonly string[] = [
+export const PAGE_WEBHOOK_FIELDS: readonly string[] = [
   "feed",
   "messages",
-  "comments",
-  "mentions",
   "messaging_postbacks",
   "message_reactions",
   "message_reads",
 ] as const;
+
+/** Campos de webhook del objeto Instagram, que se suscriben sobre la cuenta. */
+export const INSTAGRAM_WEBHOOK_FIELDS: readonly string[] = [
+  "comments",
+  "mentions",
+  "messages",
+  "messaging_postbacks",
+  "message_reactions",
+  "message_reads",
+] as const;
+
+/** Campos sin los que la bandeja no recibe nada: si faltan, se avisa en la UI. */
+const REQUIRED_PAGE_FIELDS = ["feed", "messages"];
+const REQUIRED_INSTAGRAM_FIELDS = ["comments", "messages"];
 
 export type InboxAttachment = { type: string; url: string };
 
@@ -431,23 +444,24 @@ async function ingestConversations(
 }
 
 /**
- * Suscribe la app del tenant a los webhooks de una Página. Si Meta rechaza un
- * campo concreto se reintenta sin él, así un campo no soportado por la versión
- * de la API no deja la cuenta sin notificaciones. Un problema de permisos o de
- * token no se arregla recortando campos: se propaga el mensaje original de Meta
- * para que el diagnóstico diga la causa real.
+ * Suscribe la app del tenant a los webhooks de un objeto de la Graph API. Si
+ * Meta rechaza un campo concreto se reintenta sin él, así un campo no soportado
+ * por la versión de la API no deja la cuenta sin notificaciones. Un problema de
+ * permisos o de token no se arregla recortando campos: se propaga el mensaje
+ * original de Meta para que el diagnóstico diga la causa real.
  */
-export async function subscribePageWebhooks(
-  pageId: string,
-  accessToken: string
+async function subscribeWebhooks(
+  objectId: string,
+  accessToken: string,
+  candidates: readonly string[]
 ): Promise<{ subscribed: string[]; rejected: string[] }> {
   const rejected: string[] = [];
-  let fields = [...WEBHOOK_FIELDS];
+  let fields = [...candidates];
   let lastFieldError: string | null = null;
 
   while (fields.length > 0) {
     try {
-      await graphRequest<{ success?: boolean }>(`/${pageId}/subscribed_apps`, {
+      await graphRequest<{ success?: boolean }>(`/${objectId}/subscribed_apps`, {
         subscribed_fields: fields.join(","),
         access_token: accessToken,
       });
@@ -469,6 +483,19 @@ export async function subscribePageWebhooks(
     `Meta rechazó todos los campos de webhook${lastFieldError ? `: ${lastFieldError}` : "."}`,
     400
   );
+}
+
+export function subscribePageWebhooks(pageId: string, accessToken: string) {
+  return subscribeWebhooks(pageId, accessToken, PAGE_WEBHOOK_FIELDS);
+}
+
+export function subscribeInstagramWebhooks(igUserId: string, accessToken: string) {
+  return subscribeWebhooks(igUserId, accessToken, INSTAGRAM_WEBHOOK_FIELDS);
+}
+
+/** Los campos rechazados que dejan la bandeja sin eventos de verdad. */
+function missingRequiredFields(rejected: string[], required: string[]): string[] {
+  return required.filter((field) => rejected.includes(field));
 }
 
 /**
@@ -509,9 +536,11 @@ export async function syncTenantInbox(tenantId: string): Promise<InboxSyncSummar
     try {
       const result = await subscribePageWebhooks(page.profileId, page.accessToken);
       summary.subscribed.push(...result.subscribed);
-      if (result.rejected.length) {
+      const missing = missingRequiredFields(result.rejected, REQUIRED_PAGE_FIELDS);
+      if (missing.length) {
         summary.warnings.push(
-          `Meta no aceptó los webhooks ${result.rejected.join(", ")} en ${page.username ?? page.profileId}.`
+          `Meta no aceptó los webhooks ${missing.join(", ")} en ${page.username ?? page.profileId}: ` +
+            "sin ellos no llegan comentarios ni mensajes de esa Página."
         );
       }
     } catch (error) {
@@ -520,6 +549,31 @@ export async function syncTenantInbox(tenantId: string): Promise<InboxSyncSummar
         `No se pudieron activar los webhooks de ${page.username ?? page.profileId}: ${
           error instanceof Error ? error.message : "error desconocido"
         }`
+      );
+    }
+  }
+
+  // Los comentarios y menciones de Instagram se suscriben sobre la cuenta, no
+  // sobre la Página; pedirlos en la Página hace que Meta rechace la llamada.
+  const instagramAccounts = profiles.filter((profile) => profile.platform === INSTAGRAM_PLATFORM);
+
+  for (const account of instagramAccounts) {
+    try {
+      const result = await subscribeInstagramWebhooks(account.profileId, account.accessToken);
+      summary.subscribed.push(...result.subscribed);
+      const missing = missingRequiredFields(result.rejected, REQUIRED_INSTAGRAM_FIELDS);
+      if (missing.length) {
+        summary.warnings.push(
+          `Meta no aceptó los webhooks ${missing.join(", ")} en ${account.username ?? account.profileId}: ` +
+            "sin ellos no llegan comentarios ni mensajes de Instagram."
+        );
+      }
+    } catch (error) {
+      summary.skippedSubscription.push(account.username ?? account.profileId);
+      summary.warnings.push(
+        `No se pudieron activar los webhooks de Instagram de ${
+          account.username ?? account.profileId
+        }: ${error instanceof Error ? error.message : "error desconocido"}`
       );
     }
   }
@@ -587,18 +641,30 @@ export async function sendInboxReply({
     // que se prueban ambos. Un 100 significa "objeto inválido para esta ruta".
     for (const target of parentCandidates(thread.socialProfile)) {
       try {
-        const data = await graphRequest<{ message_id?: string }>(`/${target}/messages`, {
-          recipient: JSON.stringify({ id: thread.participantExternalId }),
+        const data = await sendDirectMessage(target, token, thread.participantExternalId, body, {
           messaging_type: "RESPONSE",
-          message: JSON.stringify({ text: body }),
-          access_token: token,
         });
 
-        return { externalId: data.message_id || `local_${crypto.randomUUID()}` };
+        return data;
       } catch (error) {
         if (!(error instanceof FacebookApiError)) throw error;
         lastError = error;
-        // Permisos (10/190/200) o ventana de 24 h no se arreglan cambiando de id.
+
+        // Fuera de la ventana de 24 h: la etiqueta HUMAN_AGENT habilita hasta 7
+        // días para que una persona responda, que es justo el caso de la bandeja.
+        if (isOutsideWindowError(error)) {
+          try {
+            return await sendDirectMessage(target, token, thread.participantExternalId, body, {
+              messaging_type: "MESSAGE_TAG",
+              tag: "HUMAN_AGENT",
+            });
+          } catch (retry) {
+            if (!(retry instanceof FacebookApiError)) throw retry;
+            lastError = retry;
+          }
+        }
+
+        // Permisos (10/190/200) no se arreglan cambiando de id.
         if (error.code !== 100) break;
       }
     }
@@ -653,13 +719,43 @@ function parentCandidates(profile: {
   return ids;
 }
 
+/**
+ * Meta responde en el idioma del token, así que la ventana de mensajería se
+ * detecta por texto en inglés y en español, no por código: el mismo `10` sirve
+ * para permisos faltantes.
+ */
+const OUTSIDE_WINDOW = /outside (of )?(the )?(allowed |permitted )?window|per[ií]odo permitido/i;
+
+function isOutsideWindowError(error: FacebookApiError): boolean {
+  return OUTSIDE_WINDOW.test(error.message);
+}
+
+async function sendDirectMessage(
+  target: string,
+  token: string,
+  recipientId: string,
+  body: string,
+  extra: Record<string, string>
+): Promise<{ externalId: string }> {
+  const data = await graphRequest<{ message_id?: string }>(`/${target}/messages`, {
+    recipient: JSON.stringify({ id: recipientId }),
+    ...extra,
+    message: JSON.stringify({ text: body }),
+    access_token: token,
+  });
+
+  return { externalId: data.message_id || `local_${crypto.randomUUID()}` };
+}
+
 /** Traduce los rechazos más comunes de Meta a algo accionable en la UI. */
 function describeReplyError(error: FacebookApiError): FacebookApiError {
   const message = error.message;
 
-  if (/outside (of )?(the )?allowed window|24 ?hour/i.test(message)) {
+  if (isOutsideWindowError(error)) {
     return new FacebookApiError(
-      "Meta sólo permite responder dentro de las 24 h posteriores al último mensaje del contacto.",
+      "Meta no permitió el envío: el contacto no escribe desde hace más de 7 días, " +
+        "así que no se puede responder ni con la etiqueta de agente humano. " +
+        "Fuera de esa ventana sólo se pueden enviar notificaciones con plantilla.",
       error.status,
       error.code
     );

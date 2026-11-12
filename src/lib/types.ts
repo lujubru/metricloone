@@ -93,12 +93,13 @@ export type InboxSetup = {
   callbackUrl: string;
   verifyTokenConfigured: boolean;
   appId: string | null;
-  webhookFields: string[];
+  webhookFields: { pages: string[]; instagram: string[] };
   accounts: {
     id: string;
     platform: string;
     account: string;
     profileId: string;
+    webhookObjectId: string;
     subscribedFields: string[] | null;
     missingFields: string[] | null;
     error: string | null;
