@@ -9,7 +9,6 @@ import {
   Mail,
   MessageCircle,
   RefreshCw,
-  Send,
   Settings2,
   X,
 } from 'lucide-react';
@@ -37,6 +36,48 @@ const SELECT_STYLE = {
 
 function platformLabel(platform: string) {
   return PLATFORM_LABELS[platform] ?? platform;
+}
+
+const IG_USERNAME = /^[A-Za-z0-9._]{1,30}$/;
+
+/**
+ * Enlace para responder en la red social. En los comentarios alcanza con el
+ * permalink de la publicación; los mensajes directos no tienen URL propia, así
+ * que se usa el id del contacto en Facebook y el usuario en Instagram (el IGSID
+ * no sirve como URL).
+ */
+function replyLink(thread: InboxThreadDetail): { href: string; label: string } {
+  const platform = platformLabel(thread.platform);
+  const label = `Abrir en ${platform}`;
+
+  if (thread.kind === 'MESSAGE') {
+    if (thread.platform === 'facebook_page') {
+      return {
+        href: thread.participantExternalId
+          ? `https://www.facebook.com/messages/t/${encodeURIComponent(thread.participantExternalId)}`
+          : 'https://business.facebook.com/latest/inbox/all',
+        label,
+      };
+    }
+
+    const username = (thread.participantName ?? '').trim().replace(/^@/, '');
+    return {
+      href: IG_USERNAME.test(username)
+        ? `https://ig.me/m/${encodeURIComponent(username)}`
+        : 'https://www.instagram.com/direct/inbox/',
+      label,
+    };
+  }
+
+  if (thread.permalink) return { href: thread.permalink, label };
+
+  return {
+    href:
+      thread.platform === 'instagram_business'
+        ? `https://www.instagram.com/${encodeURIComponent(thread.account)}`
+        : `https://www.facebook.com/${encodeURIComponent(thread.account)}`,
+    label,
+  };
 }
 
 function initials(value: string | null) {
@@ -71,8 +112,6 @@ export default function InboxPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<InboxThreadDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [reply, setReply] = useState('');
-  const [sending, setSending] = useState(false);
 
   const [showSetup, setShowSetup] = useState(false);
   const [setup, setSetup] = useState<InboxSetup | null>(null);
@@ -113,7 +152,6 @@ export default function InboxPage() {
   const openThread = async (thread: InboxThreadSummary) => {
     setSelectedId(thread.id);
     setDetail(null);
-    setReply('');
     setDetailLoading(true);
 
     try {
@@ -171,39 +209,6 @@ export default function InboxPage() {
     }
   };
 
-  const sendReply = async () => {
-    const body = reply.trim();
-    if (!detail || !body || sending) return;
-
-    setSending(true);
-    setBanner(null);
-
-    try {
-      const res = await fetch(`/api/inbox/${detail.id}/reply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'No se pudo enviar la respuesta');
-
-      setReply('');
-      const refreshed = await fetch(`/api/inbox/${detail.id}`);
-      if (refreshed.ok) {
-        const payload = await refreshed.json();
-        setDetail(payload.thread);
-      }
-      await loadThreads();
-    } catch (cause) {
-      setBanner({
-        type: 'error',
-        message: cause instanceof Error ? cause.message : 'No se pudo enviar la respuesta',
-      });
-    } finally {
-      setSending(false);
-    }
-  };
-
   const toggleSetup = async () => {
     const next = !showSetup;
     setShowSetup(next);
@@ -224,8 +229,6 @@ export default function InboxPage() {
       setSetupLoading(false);
     }
   };
-
-  const canReply = Boolean(detail);
 
   return (
     <>
@@ -493,7 +496,7 @@ export default function InboxPage() {
               }}
             >
               <MessageCircle size={40} style={{ marginBottom: '0.75rem' }} />
-              <p style={{ fontSize: '0.9rem' }}>Elegí una conversación para verla y responder.</p>
+              <p style={{ fontSize: '0.9rem' }}>Elegí una conversación para verla.</p>
             </div>
           ) : detailLoading ? (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -521,7 +524,7 @@ export default function InboxPage() {
                         color: 'var(--primary-color)',
                       }}
                     >
-                      Ver en {platformLabel(detail.platform)} <ExternalLink size={12} />
+                      Ver publicación <ExternalLink size={12} />
                     </a>
                   )}
                 </div>
@@ -588,36 +591,39 @@ export default function InboxPage() {
               </div>
 
               <div style={{ borderTop: '1px solid var(--border-color)', padding: '0.75rem' }}>
-                {canReply ? (
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-                    <textarea
-                      value={reply}
-                      onChange={(event) => setReply(event.target.value)}
-                      placeholder={
-                        detail.kind === 'MESSAGE'
-                          ? 'Escribí un mensaje directo…'
-                          : 'Escribí una respuesta al comentario…'
-                      }
-                      rows={2}
-                      style={{
-                        ...SELECT_STYLE,
-                        flex: 1,
-                        resize: 'vertical',
-                        fontFamily: 'inherit',
-                        fontSize: '0.87rem',
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={sendReply}
-                      disabled={sending || !reply.trim()}
-                    >
-                      {sending ? <Loader2 size={16} style={SPIN} /> : <Send size={16} />}
-                      <span style={{ marginLeft: '0.4rem' }}>{sending ? 'Enviando…' : 'Enviar'}</span>
-                    </button>
-                  </div>
-                ) : null}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '0.75rem',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <p
+                    style={{
+                      margin: 0,
+                      flex: 1,
+                      minWidth: '12rem',
+                      fontSize: '0.8rem',
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Meta restringe el envío de respuestas desde aplicaciones externas. Abrí la
+                    conversación en {platformLabel(detail.platform)} y respondé ahí: el mensaje ya
+                    está cargado.
+                  </p>
+                  <a
+                    className="btn btn-primary"
+                    href={replyLink(detail).href}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                  >
+                    {replyLink(detail).label}
+                    <ExternalLink size={16} />
+                  </a>
+                </div>
               </div>
             </>
           ) : null}
