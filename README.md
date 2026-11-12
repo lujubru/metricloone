@@ -247,6 +247,15 @@ Idempotencia: `InboxMessage.externalId` es único, y la ingesta hace `upsert` co
 
 Los mensajes propios se detectan comparando el autor con la cuenta: en Facebook `from.id === pageId`; en Instagram el autor se compara por `username` (la API de comentarios de IG no expone el id del autor). Los `OUTBOUND` nacen como leídos, así que no inflan el contador.
 
+### Responder desde la bandeja
+
+`POST /api/inbox/[id]/reply` elige el destino según el hilo:
+
+- **Mensaje directo**: `POST /{cuenta}/messages` con `recipient` y `messaging_type: RESPONSE`. Para Instagram con token de Página el id válido puede ser el de la cuenta (`profileId`) o el de la Página vinculada (`parentProfileId`), así que se prueban los dos y se corta ante cualquier error que no sea `100` (*objeto inválido para esta ruta*): un problema de permisos (`10`/`190`/`200`) o la ventana de 24 h no se arregla cambiando de id.
+- **Comentario**: en Facebook `POST /{comment-id}/comments`, en Instagram `POST /{comment-id}/replies`. Se intenta primero la ruta de la plataforma y se cae a la otra ante un `100`.
+
+La respuesta se guarda como mensaje `OUTBOUND` con `upsert` sobre `externalId` (el eco del webhook puede llegar antes de que termine la request) y la UI recarga el hilo y la lista. Los rechazos de Meta se muestran en el banner con el mensaje original y quedan en el log del servidor junto al `code` de la Graph API.
+
 ### Configurar el webhook en Meta (una vez por app de cliente)
 
 1. Definir `META_WEBHOOK_VERIFY_TOKEN` en el entorno (cadena larga y aleatoria) y redeployar.
@@ -262,7 +271,7 @@ La ruta es pública: `src/proxy.ts` sólo matchea páginas (excluye `api`), así
 
 ### Requisitos y límites
 
-- Los permisos de Meta ya incluyen `pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_manage_comments` e `instagram_manage_messages`. **Si conectaste las cuentas antes de este cambio hay que volver a conectar Facebook**, porque el token guardado no los tiene.
+- Los permisos de Meta incluyen `pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `pages_manage_metadata` (necesario para `subscribed_apps`), `instagram_manage_comments` e `instagram_manage_messages`. **Si conectaste las cuentas antes de este cambio hay que volver a conectar Facebook**, porque el token guardado no los tiene.
 - En modo *Development* la app sólo recibe eventos de usuarios con rol en ella (igual que el resto del flujo).
 - Los **mensajes directos** se pueden responder sólo dentro de la ventana de 24 h que impone la API de mensajería de Meta; después hay que usar una etiqueta de mensaje o esperar al siguiente mensaje del usuario. La UI permite escribir igual y el error de Meta queda visible.
 - En Instagram responder un comentario requiere `instagram_manage_comments`; borrar el hilo en la UI es **local** (no borra nada en Meta).
@@ -352,6 +361,7 @@ Casos reales encontrados durante el despliegue y la puesta en marcha:
 | El **Inbox** no recibe nada | Falta configurar el webhook, o el token guardado es anterior a los permisos de mensajería. | Definir `META_WEBHOOK_VERIFY_TOKEN`, cargar la Callback URL y el Verify token en la app de Meta, y reconectar Facebook para autorizar `pages_messaging` / `pages_read_user_content` / `instagram_manage_*`. Mientras tanto se puede forzar con *Actualizar*. |
 | `GET /api/webhooks/meta` devuelve 500 | `META_WEBHOOK_VERIFY_TOKEN` no está definida en el entorno. | Cargarla y redeployar; el setup en `/inbox` -> *Webhooks* lo muestra como `verifyTokenConfigured: false`. |
 | Llegan comentarios pero no mensajes directos (o al revés) | Permisos parciales en el token o campos no suscriptos en la Página. | Revisar `GET /api/inbox/setup` (qué campos faltan por cuenta) y el banner de `POST /api/inbox/sync`. |
+| Se escribe una respuesta pero **no se envía** | Meta rechazó el envío: falta `pages_messaging` / `instagram_manage_messages`, el contacto escribió hace más de 24 h, o la cuenta no tiene rol sobre la Página. | El banner muestra el mensaje de Meta y el log del servidor registra el `code` de la Graph API (`Meta rechazó la respuesta del hilo …`). Reconectar Facebook si el token es viejo; fuera de la ventana de 24 h no hay forma de responder sin una etiqueta de mensaje. |
 
 ## Notas de desarrollo (Next.js 16 / ESLint)
 

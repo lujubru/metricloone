@@ -431,9 +431,11 @@ async function ingestConversations(
 }
 
 /**
- * Suscribe la app del tenant a los webhooks de una Página. Si Meta rechaza
- * algún campo se reintenta sin el último hasta que la llamada pase; así un
- * campo no soportado no deja la cuenta sin notificaciones.
+ * Suscribe la app del tenant a los webhooks de una Página. Si Meta rechaza un
+ * campo concreto se reintenta sin él, así un campo no soportado por la versión
+ * de la API no deja la cuenta sin notificaciones. Un problema de permisos o de
+ * token no se arregla recortando campos: se propaga el mensaje original de Meta
+ * para que el diagnóstico diga la causa real.
  */
 export async function subscribePageWebhooks(
   pageId: string,
@@ -441,6 +443,7 @@ export async function subscribePageWebhooks(
 ): Promise<{ subscribed: string[]; rejected: string[] }> {
   const rejected: string[] = [];
   let fields = [...WEBHOOK_FIELDS];
+  let lastFieldError: string | null = null;
 
   while (fields.length > 0) {
     try {
@@ -450,13 +453,22 @@ export async function subscribePageWebhooks(
       });
       return { subscribed: fields, rejected };
     } catch (error) {
-      if (!(error instanceof FacebookApiError) || error.retryable) throw error;
+      // code 100 = campo desconocido o inválido para esta versión de la API.
+      // Cualquier otro (10/190/200 = permisos o token) afecta a todos por igual.
+      const isFieldError =
+        error instanceof FacebookApiError && error.code === 100 && !error.retryable;
+      if (!isFieldError) throw error;
+
+      lastFieldError = error.message;
       rejected.unshift(fields[fields.length - 1]);
       fields = fields.slice(0, -1);
     }
   }
 
-  throw new FacebookApiError("Meta rechazó todos los campos de webhook.", 400);
+  throw new FacebookApiError(
+    `Meta rechazó todos los campos de webhook${lastFieldError ? `: ${lastFieldError}` : "."}`,
+    400
+  );
 }
 
 /**
@@ -568,17 +580,30 @@ export async function sendInboxReply({
       );
     }
 
-    const data = await graphRequest<{ message_id?: string; recipient_id?: string }>(
-      `/${thread.socialProfile.profileId}/messages`,
-      {
-        recipient: JSON.stringify({ id: thread.participantExternalId }),
-        messaging_type: "RESPONSE",
-        message: JSON.stringify({ text: body }),
-        access_token: token,
-      }
-    );
+    let lastError: FacebookApiError | null = null;
 
-    return { externalId: data.message_id || `local_${crypto.randomUUID()}` };
+    // Los DM se mandan contra la cuenta dueña del token; en Instagram con token
+    // de Página el id válido puede ser el de la Página y no el de la cuenta, así
+    // que se prueban ambos. Un 100 significa "objeto inválido para esta ruta".
+    for (const target of parentCandidates(thread.socialProfile)) {
+      try {
+        const data = await graphRequest<{ message_id?: string }>(`/${target}/messages`, {
+          recipient: JSON.stringify({ id: thread.participantExternalId }),
+          messaging_type: "RESPONSE",
+          message: JSON.stringify({ text: body }),
+          access_token: token,
+        });
+
+        return { externalId: data.message_id || `local_${crypto.randomUUID()}` };
+      } catch (error) {
+        if (!(error instanceof FacebookApiError)) throw error;
+        lastError = error;
+        // Permisos (10/190/200) o ventana de 24 h no se arreglan cambiando de id.
+        if (error.code !== 100) break;
+      }
+    }
+
+    throw describeReplyError(lastError!);
   }
 
   const target = await prisma.inboxMessage.findFirst({
@@ -590,10 +615,63 @@ export async function sendInboxReply({
     throw new FacebookApiError("No hay un comentario para responder en esta publicación.", 400);
   }
 
-  const data = await graphRequest<{ id: string }>(`/${target.externalId}/comments`, {
-    message: body,
-    access_token: token,
-  });
+  // Facebook responde con `/comments`; Instagram con `/replies`. Se prueban en
+  // el orden que corresponde a la plataforma y se cae al otro ante un 100.
+  const paths =
+    thread.platform === INSTAGRAM_PLATFORM
+      ? [`/${target.externalId}/replies`, `/${target.externalId}/comments`]
+      : [`/${target.externalId}/comments`, `/${target.externalId}/replies`];
 
-  return { externalId: data.id };
+  let lastError: FacebookApiError | null = null;
+
+  for (const path of paths) {
+    try {
+      const data = await graphRequest<{ id: string }>(path, {
+        message: body,
+        access_token: token,
+      });
+      return { externalId: data.id };
+    } catch (error) {
+      if (!(error instanceof FacebookApiError)) throw error;
+      lastError = error;
+      if (error.code !== 100) break;
+    }
+  }
+
+  throw describeReplyError(lastError!);
+}
+
+/** Ids con los que se puede enviar: la cuenta y su Página vinculada, sin repetir. */
+function parentCandidates(profile: {
+  profileId: string;
+  parentProfileId: string | null;
+}): string[] {
+  const ids = [profile.profileId];
+  if (profile.parentProfileId && profile.parentProfileId !== profile.profileId) {
+    ids.push(profile.parentProfileId);
+  }
+  return ids;
+}
+
+/** Traduce los rechazos más comunes de Meta a algo accionable en la UI. */
+function describeReplyError(error: FacebookApiError): FacebookApiError {
+  const message = error.message;
+
+  if (/outside (of )?(the )?allowed window|24 ?hour/i.test(message)) {
+    return new FacebookApiError(
+      "Meta sólo permite responder dentro de las 24 h posteriores al último mensaje del contacto.",
+      error.status,
+      error.code
+    );
+  }
+
+  if (/does not have an appropriate role/i.test(message)) {
+    return new FacebookApiError(
+      `La cuenta conectada no tiene rol sobre la Página: ${message}`,
+      error.status,
+      error.code
+    );
+  }
+
+  return error;
 }

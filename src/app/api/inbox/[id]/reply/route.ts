@@ -51,8 +51,11 @@ export async function POST(req: Request, context: Context) {
     return NextResponse.json({ ok: true, externalId });
   } catch (error) {
     if (error instanceof FacebookApiError) {
-      console.error("Meta rechazó la respuesta:", error.message);
-      return badRequest(error.message);
+      console.error(
+        `Meta rechazó la respuesta del hilo ${id} (HTTP ${error.status}, code ${error.code ?? "-"}):`,
+        error.message
+      );
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
     console.error("Error al responder en el inbox:", error);
     return serverError("No se pudo enviar la respuesta");

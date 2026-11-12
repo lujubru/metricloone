@@ -20,6 +20,9 @@ export const FACEBOOK_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
+  // Necesario para POST /{page-id}/subscribed_apps, que es como se activan los
+  // webhooks del Inbox. Sin este permiso Meta rechaza todos los campos.
+  "pages_manage_metadata",
   "pages_read_user_content",
   "pages_messaging",
   "pages_manage_engagement",
