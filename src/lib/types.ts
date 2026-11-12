@@ -48,3 +48,59 @@ export type InstagramAccountItem = {
   pageId: string;
   pageName: string;
 };
+
+export type InboxAttachment = { type: string; url: string };
+
+export type InboxMessageItem = {
+  id: string;
+  direction: string;
+  authorName: string | null;
+  body: string;
+  attachments: InboxAttachment[] | null;
+  permalink: string | null;
+  isRead: boolean;
+  createdAt: string;
+};
+
+export type InboxThreadSummary = {
+  id: string;
+  platform: string;
+  kind: string;
+  subject: string | null;
+  permalink: string | null;
+  participantName: string | null;
+  participantAvatar: string | null;
+  lastMessageAt: string;
+  unread: number;
+  account: string;
+  lastMessage: { id: string; direction: string; body: string; createdAt: string } | null;
+};
+
+export type InboxThreadDetail = {
+  id: string;
+  platform: string;
+  kind: string;
+  subject: string | null;
+  permalink: string | null;
+  participantName: string | null;
+  participantAvatar: string | null;
+  participantExternalId: string | null;
+  account: string;
+  messages: InboxMessageItem[];
+};
+
+export type InboxSetup = {
+  callbackUrl: string;
+  verifyTokenConfigured: boolean;
+  appId: string | null;
+  webhookFields: string[];
+  accounts: {
+    id: string;
+    platform: string;
+    account: string;
+    profileId: string;
+    subscribedFields: string[] | null;
+    missingFields: string[] | null;
+    error: string | null;
+  }[];
+};

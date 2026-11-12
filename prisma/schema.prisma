@@ -77,6 +77,7 @@ model Tenant {
   posts          Post[]
   mediaAssets    MediaAsset[]
   fbConnection   FbConnection?
+  inboxThreads   InboxThread[]
 }
 
 model MediaAsset {
@@ -124,6 +125,7 @@ model SocialProfile {
   tenant        Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user          User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
   posts         Post[]
+  inboxThreads  InboxThread[]
 
   @@unique([tenantId, platform, profileId])
   @@index([tenantId])
@@ -152,4 +154,47 @@ model Post {
 
   @@index([status, scheduledFor])
   @@index([tenantId, scheduledFor])
+}
+
+model InboxThread {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  socialProfileId        String
+  platform               String // facebook_page | instagram_business
+  kind                   String // COMMENT | MESSAGE
+  externalThreadId       String // id del post/media (COMMENT) o PSID/IGSID del interlocutor (MESSAGE)
+  subject                String?   @db.Text // texto del post o asunto de la conversación
+  permalink              String?
+  participantName        String?
+  participantAvatar      String?
+  participantExternalId  String? // PSID (Messenger) o IGSID (Instagram): necesario para responder
+  lastMessageAt          DateTime
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  socialProfile SocialProfile @relation(fields: [socialProfileId], references: [id], onDelete: Cascade)
+  messages      InboxMessage[]
+
+  @@unique([tenantId, platform, kind, externalThreadId])
+  @@index([tenantId, lastMessageAt])
+}
+
+model InboxMessage {
+  id               String   @id @default(cuid())
+  threadId         String
+  externalId       String   @unique // id del comentario o mid del mensaje (idempotencia del webhook)
+  direction        String   @default("INBOUND") // INBOUND | OUTBOUND
+  authorName       String?
+  authorExternalId String?
+  body             String   @db.Text
+  attachments      Json? // [{ type, url }]
+  permalink        String?
+  isRead           Boolean  @default(false)
+  remoteCreatedAt  DateTime
+  createdAt        DateTime @default(now())
+
+  thread InboxThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, remoteCreatedAt])
 }

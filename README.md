@@ -29,10 +29,10 @@ Flujo de uso en producción:
 | `/admin` | OK | Sólo `ADMIN`: crea cuentas (tenants), carga el App ID/Secret de Facebook de cada una y gestiona sus usuarios. |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
 | `/connections` | OK | Conexión OAuth con la app de Facebook **de la propia cuenta**, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. |
-| `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Permite **subir imágenes y videos** (varios por publicación) y elegir entre **Publicación** o **Historia**. Muestra miniaturas, el tipo, el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
+| `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Permite **subir imágenes y videos** (varios por publicación) y elegir entre **Publicación** o **Historia**. Vistas **Día / Semana / Mes** reales, filtros por perfil, red, tipo y estado, navegación de período y el botón **Nuevo post** del topbar habilitado. Muestra miniaturas, el tipo, el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
 | `/settings` | OK | Datos de la sesión, cierre de sesión y desconexión de perfiles. |
 | `/smartlink` | WIP | Constructor de página "link in bio". Solo estado en cliente (sin persistencia). |
-| `/inbox` | WIP | Placeholder de comentarios/mensajes. |
+| `/inbox` | OK | Bandeja unificada de **comentarios y mensajes directos** de las Páginas de Facebook y cuentas de Instagram conectadas. Ver [Inbox](#inbox-comentarios-y-mensajes-directos). |
 
 ## Stack
 
@@ -80,6 +80,7 @@ Abre `http://localhost:3000`, entrá con el usuario administrador y creá las cu
 | `SCHEDULER_ENABLED` | No | `false` desactiva el scheduler interno; `true` lo fuerza en desarrollo. |
 | `PUBLISH_INTERVAL_SECONDS` | No | Intervalo del scheduler interno en segundos (default `60`, mínimo `15`). |
 | `FACEBOOK_GRAPH_VERSION` | No | Versión de la Graph API (default `v23.0`). |
+| `META_WEBHOOK_VERIFY_TOKEN` | Si (Inbox) | Cadena aleatoria que se pega como *Verify token* al configurar el webhook en cada app de Meta. Sin ella `/api/webhooks/meta` responde 500 en la verificación. |
 | `LEGAL_CONTACT_EMAIL` | No | Email de contacto que muestran `/privacy` y `/data-deletion` (default `soporte@pixeldesarrollo.com`). |
 | `NEXT_PUBLIC_APP_NAME` | No | Nombre visible en las páginas legales (default `Metricool Clone`). |
 
@@ -91,7 +92,9 @@ En cada app de Meta hay que agregar la redirect URI de OAuth válida:
 https://<tu-dominio>/api/connect/facebook/callback
 ```
 
-Permisos solicitados: `email`, `public_profile`, `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`.
+Permisos solicitados: `email`, `public_profile`, `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`, `instagram_manage_messages`.
+
+Los permisos de **Inbox** (`pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_manage_comments`, `instagram_manage_messages`) se agregaron después de la primera puesta en marcha: si conectaste las cuentas antes, hay que **volver a conectar Facebook** para que el token los incluya. La lista vive en `FACEBOOK_SCOPES` (`src/lib/facebook.ts`).
 
 
 `business_management` se pide porque sin él las Páginas que están dentro de un Business Portfolio pueden no aparecer en `/me/accounts`.
@@ -136,6 +139,8 @@ Modelos en `prisma/schema.prisma`:
 - `SocialProfile`: perfil conectado (`platform`, `profileId`, `parentProfileId` para el Instagram de una Página, tokens, `tokenExpiresAt`), único por `tenantId + platform + profileId`.
 - `Post`: contenido, `mediaUrls`, `postType` (`POST`/`STORY`), `scheduledFor`, `status`, `publishedAt`, `facebookPostId`, `errorMessage`, `attempts`, relación con `Tenant`, `User` y `SocialProfile`.
 - `MediaAsset`: archivo subido desde el calendario (`filename`, `mimeType`, `kind` `IMAGE`/`VIDEO`, `size`, `data` como `bytea`), aislado por `tenantId`. Se sirve públicamente en `/api/media/<id>/<filename>` y se borra junto con el post cuando ya no lo referencia ningún otro.
+- `InboxThread`: conversación de la bandeja (`kind` `COMMENT`/`MESSAGE`, `platform`, `externalThreadId` = id del post de FB, del media de IG o el PSID/IGSID del interlocutor en los DMs, `subject`, `permalink`, `participantName`, `participantExternalId`, `lastMessageAt`). Único por `tenantId + platform + kind + externalThreadId`.
+- `InboxMessage`: mensaje o comentario dentro de un hilo (`externalId` único global para deduplicar webhooks y syncs, `direction` `INBOUND`/`OUTBOUND`, `body`, `authorName`, `authorExternalId`, `permalink`, `attachments` en JSON, `isRead`, `remoteCreatedAt`).
 
 Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate deploy`.
 
@@ -163,6 +168,13 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/media/[id]/[filename]` | GET/HEAD | Sirve el archivo almacenado en la base (público, con `Cache-Control` inmutable). La extensión es obligatoria. |
 | `/api/posts/[id]/publish` | POST | Publica el post inmediatamente en la red del perfil (Página de Facebook o cuenta de Instagram). |
 | `/api/cron/publish` | GET/POST | Publica los posts vencidos. Requiere `Authorization: Bearer $CRON_SECRET`. |
+
+| `/api/inbox` | GET | Lista los hilos del tenant con el último mensaje, el conteo de no leídos y los filtros `platform`, `kind` y `unreadOnly`. |
+| `/api/inbox/[id]` | GET/PATCH/DELETE | Detalle del hilo con todos sus mensajes; `PATCH { isRead }` lo marca leído; `DELETE` borra el hilo local (no toca Meta). |
+| `/api/inbox/[id]/reply` | POST | Responde al hilo: mensaje directo si es `MESSAGE`, respuesta al comentario si es `COMMENT`. Persiste el `OUTBOUND` en la misma transacción. |
+| `/api/inbox/sync` | POST | Trae comentarios y mensajes de todas las cuentas conectadas (`maxDuration` 60 s) y devuelve `imported` más `warnings` por fuente. |
+| `/api/inbox/setup` | GET | Diagnóstico: `callbackUrl` del webhook, si `META_WEBHOOK_VERIFY_TOKEN` está definida, campos requeridos y, por cuenta, qué campos ya están suscriptos. |
+| `/api/webhooks/meta` | GET/POST | Webhook público de Meta. `GET` responde el `hub.challenge` de la verificación; `POST` valida `X-Hub-Signature-256` con el App Secret **del tenant dueño del perfil** e ingesta el evento. |
 
 ## Publicación automática
 
@@ -195,6 +207,13 @@ Existen dos disparadores, y puedes usar uno, otro o ambos:
 
 Los posts que queden en `PUBLISHING` más de 10 minutos (por un reinicio a mitad de publicación) se devuelven a `SCHEDULED` automáticamente.
 
+## Calendario (`/planning`)
+
+- **Vistas Día / Semana / Mes** con navegación de período (`‹` / `›` / «hoy»). El período visible se calcula desde un `anchorDate` en estado; antes el mes estaba fijo a `new Date()` y los botones no tenían handler.
+- **Filtros** por perfil, red, tipo (`POST`/`STORY`) y estado, aplicados en el cliente sobre la lista ya cargada.
+- El botón **Nuevo post** del topbar y el de dentro del calendario abren el mismo modal. El topbar usa `backdrop-filter: blur(8px)`, que crea un contexto de apilamiento y rompía el `position: fixed` del modal (quedaba detrás y no se podía clickear); el modal se renderiza ahora en un contenedor que escapa a ese contexto y con `z-index` propio.
+- Se quitó el hover oculto «+ Publicar» de las celdas vacías: crear publicaciones se hace sólo por los dos botones.
+
 ## Medios subidos (imágenes y videos)
 
 En `/planning` los medios se suben como archivos, no como URLs:
@@ -207,6 +226,47 @@ En `/planning` los medios se suben como archivos, no como URLs:
 - Cada archivo subido queda asociado al `tenantId` de la sesión; `DELETE /api/media` y el borrado del post lo eliminan también de la base.
 
 Límites y formatos aceptados están centralizados en `src/lib/media.ts` y `src/lib/post-validation.ts`.
+
+## Inbox (comentarios y mensajes directos)
+
+`/inbox` es una bandeja de dos paneles que unifica **comentarios** y **mensajes directos** de las Páginas de Facebook y las cuentas de Instagram Business conectadas en `/connections`.
+
+- Panel izquierdo: hilos con avatar de iniciales, red, tipo, badge de no leídos y extracto del último mensaje. Filtros por red, tipo y «sólo sin leer».
+- Panel derecho: conversación completa con burbujas `INBOUND` / `OUTBOUND`, adjuntos como enlaces y caja de respuesta.
+- Al abrir un hilo se marca leído (`PATCH /api/inbox/[id]`) y se descuenta del contador global.
+- Botón **Actualizar** -> `POST /api/inbox/sync` (importa lo que ya existe) y botón **Webhooks** -> `GET /api/inbox/setup` (diagnóstico de la configuración en Meta).
+
+### Cómo llegan los datos
+
+Hay dos caminos y conviene tener los dos:
+
+1. **Webhook en tiempo real** (`/api/webhooks/meta`). Es la vía principal: sin webhook el Inbox sólo se llena cuando alguien aprieta *Actualizar*.
+2. **Sincronización manual/`POST /api/inbox/sync`**. Recorre `/{page-id}/feed?fields=comments`, `/{ig-id}/media?fields=comments` y `/{page-id|ig-id}/conversations?fields=messages` de cada cuenta. Cada fuente falla de forma independiente: un permiso faltante aparece como *warning* en el banner, no rompe el resto.
+
+Idempotencia: `InboxMessage.externalId` es único, y la ingesta hace `upsert` con `update: {}`, así que un mismo comentario que llega por webhook y por sync (o dos veces por reintentos de Meta) se guarda una sola vez y no se pierde el `isRead`. `InboxThread.lastMessageAt` nunca retrocede.
+
+Los mensajes propios se detectan comparando el autor con la cuenta: en Facebook `from.id === pageId`; en Instagram el autor se compara por `username` (la API de comentarios de IG no expone el id del autor). Los `OUTBOUND` nacen como leídos, así que no inflan el contador.
+
+### Configurar el webhook en Meta (una vez por app de cliente)
+
+1. Definir `META_WEBHOOK_VERIFY_TOKEN` en el entorno (cadena larga y aleatoria) y redeployar.
+2. En la app de Meta del cliente -> **Webhooks** -> *Page* (y *Instagram* si la cuenta está suscripta a ese objeto):
+   - **Callback URL**: `https://<tu-dominio>/api/webhooks/meta`
+   - **Verify token**: el mismo valor de `META_WEBHOOK_VERIFY_TOKEN`
+3. Suscribir los campos `feed`, `messages`, `comments`, `mentions`, `message_reactions`, `live_comments`. La lista vive en `WEBHOOK_FIELDS` (`src/lib/inbox.ts`) y `GET /api/inbox/setup` muestra cuáles faltan por cuenta.
+4. La **suscripción de la Página** a la app la hace el propio código: al guardar Páginas en `/connections` se llama `POST /{page-id}/subscribed_apps` con todos los campos. Si Meta rechaza alguno, se reintenta sin ese campo para que `feed` y `messages` sobrevivan, y el aviso queda en `webhookWarnings` de la respuesta. `POST /api/inbox/sync` también la reintenta.
+
+**Verificación de firma multi-tenant**: cada tenant tiene su propia app de Meta. El `POST` del webhook busca el `SocialProfile` por `entry.id`, descifra el `fbAppSecret` de **ese** tenant (`src/lib/crypto.ts`) y valida `X-Hub-Signature-256` con HMAC-SHA256 en tiempo constante. Si la firma no coincide se descarta la entrada. El endpoint **siempre responde 200** (Meta deshabilita el webhook ante cualquier otro código): los errores se loguean y se saltea la entrada.
+
+La ruta es pública: `src/proxy.ts` sólo matchea páginas (excluye `api`), así que no hay que agregarla a `PUBLIC_PATHS`.
+
+### Requisitos y límites
+
+- Los permisos de Meta ya incluyen `pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_manage_comments` e `instagram_manage_messages`. **Si conectaste las cuentas antes de este cambio hay que volver a conectar Facebook**, porque el token guardado no los tiene.
+- En modo *Development* la app sólo recibe eventos de usuarios con rol en ella (igual que el resto del flujo).
+- Los **mensajes directos** se pueden responder sólo dentro de la ventana de 24 h que impone la API de mensajería de Meta; después hay que usar una etiqueta de mensaje o esperar al siguiente mensaje del usuario. La UI permite escribir igual y el error de Meta queda visible.
+- En Instagram responder un comentario requiere `instagram_manage_comments`; borrar el hilo en la UI es **local** (no borra nada en Meta).
+- Los shapes de payload de webhook y el endpoint de conversaciones de Instagram están implementados según la documentación de la Graph API pero no se pudieron probar contra cuentas reales en todas sus variantes; por eso cada fuente degrada a *warning*.
 
 ## Despliegue (Docker / Coolify)
 
@@ -241,6 +301,7 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
    ADMIN_PASSWORD=<mínimo 8 caracteres>
    ADMIN_NAME=<nombre visible>
    SCHEDULER_ENABLED=true
+   META_WEBHOOK_VERIFY_TOKEN=<cadena larga y aleatoria>   # webhook del Inbox
    ```
 
    `FACEBOOK_CLIENT_ID` / `FACEBOOK_CLIENT_SECRET` **ya no se usan** (cada tenant tiene su propia app) y `CRON_SECRET` sólo hace falta si se usa el cron externo.
@@ -272,7 +333,8 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
 2. En *Facebook Login -> Settings -> Valid OAuth Redirect URIs*: `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
 3. En *App Settings -> Basic*: Privacy Policy `https://metricool.pixeldesarrollo.com/privacy`, Data Deletion `https://metricool.pixeldesarrollo.com/data-deletion`, ícono PNG **sin canal alfa**. En *Terms of Service* no hay página propia todavía: repetir la URL de `/privacy` o crear `/terms` (el proxy ya la tiene como ruta pública).
 4. En `/admin` -> *Crear cuenta*: nombre, email, contraseña, App ID y App Secret. (Si más adelante cambia el secret, se actualiza con el botón de credenciales de esa tarjeta.)
-5. Enviar al cliente la URL de login y sus credenciales. Con la app en modo *Development* necesita figurar como Administrador/Desarrollador/Tester de la app; si no, hay que publicarla (ver *Pasar la app de un cliente a producción*).
+5. Si la cuenta va a usar el **Inbox**: configurar el webhook en la app del cliente (ver [Configurar el webhook en Meta](#configurar-el-webhook-en-meta-una-vez-por-app-de-cliente)) después de conectar las Páginas.
+6. Enviar al cliente la URL de login y sus credenciales. Con la app en modo *Development* necesita figurar como Administrador/Desarrollador/Tester de la app; si no, hay que publicarla (ver *Pasar la app de un cliente a producción*).
 
 ## Problemas conocidos y soluciones
 
@@ -287,6 +349,9 @@ Casos reales encontrados durante el despliegue y la puesta en marcha:
 | Al importar sólo aparecen algunas Páginas de Facebook | El diálogo de Login autoriza Página por Página y/o el token es anterior a los permisos actuales. | Ver *Páginas que no aparecen al importar*. |
 | Instagram no muestra cuentas | No hay cuentas Business/Creator vinculadas a las Páginas **ya conectadas**, o falta `instagram_basic`. | Conectar primero la Página en `/connections` y reconectar Facebook para autorizar el permiso. |
 | "Se produjo un error. Actualiza la página o cierra y vuelve a abrir la ventana del navegador" al subir una imagen | Es un error genérico del SDK de Facebook dentro del modal de publicación. | Recargar y reintentar; si persiste, revisar la consola del navegador y los scopes del token. |
+| El **Inbox** no recibe nada | Falta configurar el webhook, o el token guardado es anterior a los permisos de mensajería. | Definir `META_WEBHOOK_VERIFY_TOKEN`, cargar la Callback URL y el Verify token en la app de Meta, y reconectar Facebook para autorizar `pages_messaging` / `pages_read_user_content` / `instagram_manage_*`. Mientras tanto se puede forzar con *Actualizar*. |
+| `GET /api/webhooks/meta` devuelve 500 | `META_WEBHOOK_VERIFY_TOKEN` no está definida en el entorno. | Cargarla y redeployar; el setup en `/inbox` -> *Webhooks* lo muestra como `verifyTokenConfigured: false`. |
+| Llegan comentarios pero no mensajes directos (o al revés) | Permisos parciales en el token o campos no suscriptos en la Página. | Revisar `GET /api/inbox/setup` (qué campos faltan por cuenta) y el banner de `POST /api/inbox/sync`. |
 
 ## Notas de desarrollo (Next.js 16 / ESLint)
 
@@ -316,10 +381,14 @@ npm run build
 | `9992524` | Paginación completa de Páginas, Business Portfolio y aviso de permisos faltantes. |
 | `d147457` | Arquitectura multi-tenant: login propio, credenciales de Meta por cliente, OAuth por tenant, panel `/admin`, Instagram derivado de las Páginas. |
 | `aed1de7` | Copia de `scripts/` a la imagen final para poder correr `db:bootstrap` en el contenedor. |
+| `4f6230b` | Subida de imágenes y videos (varios por publicación) y elección entre Publicación e Historia. |
+| `e93845d` | Calendario: vistas Día/Semana/Mes, filtros funcionales y fix del botón «Nuevo post» del topbar. |
+| Inbox | Modelos `InboxThread`/`InboxMessage`, webhook de Meta con verificación HMAC multi-tenant, sync manual, respuestas y bandeja real en `/inbox`. |
 
 ## Pendientes
 
-- `/smartlink` (constructor de link-in-bio) y `/inbox` siguen siendo maquetas sin persistencia.
+- `/smartlink` (constructor de link-in-bio) sigue siendo una maqueta sin persistencia.
+- Inbox: probar el webhook con eventos reales de Meta (comentarios y DMs de Facebook e Instagram) y ajustar los shapes si difieren. Las respuestas todavía son sólo de texto (sin adjuntos).
 - Crear la página `/terms` si Meta la exige (el proxy ya la trata como pública).
 - Rotar la contraseña de PostgreSQL de Railway: circuló en texto plano durante la puesta en marcha.
 - Al conectar cuentas de Instagram de clientes, probar el flujo completo de publicación (hasta ahora validado sólo con la cuenta del dueño).

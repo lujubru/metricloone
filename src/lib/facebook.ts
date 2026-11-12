@@ -20,8 +20,13 @@ export const FACEBOOK_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
+  "pages_read_user_content",
+  "pages_messaging",
+  "pages_manage_engagement",
   "instagram_basic",
   "instagram_content_publish",
+  "instagram_manage_comments",
+  "instagram_manage_messages",
 ] as const;
 
 export const FACEBOOK_SCOPE_STRING = FACEBOOK_SCOPES.join(",");

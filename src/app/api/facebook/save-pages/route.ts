@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { listManagedPages } from "@/lib/facebook";
+import { subscribePageWebhooks } from "@/lib/inbox";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,11 @@ export async function POST(req: Request) {
 
     const savedProfiles = [];
 
+    // Los webhooks se piden acá y no en un paso aparte: si la Página recién se
+    // conecta y no queda suscripta, el Inbox nunca recibe eventos. Un fallo de
+    // suscripción no debe romper el guardado de la Página.
+    const webhookIssues: string[] = [];
+
     for (const pageId of selectedIds) {
       const page = available.get(pageId);
       if (!page) continue;
@@ -65,12 +71,25 @@ export async function POST(req: Request) {
         },
       });
       savedProfiles.push(profile);
+
+      try {
+        const result = await subscribePageWebhooks(page.id, page.access_token);
+        if (result.rejected.length) {
+          webhookIssues.push(
+            `${page.name}: Meta rechazó los campos ${result.rejected.join(", ")}`
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "error desconocido";
+        webhookIssues.push(`${page.name}: ${message}`);
+      }
     }
 
     return NextResponse.json({
       success: true,
       savedCount: savedProfiles.length,
       skipped: selectedIds.length - savedProfiles.length,
+      webhookWarnings: webhookIssues,
     });
   } catch (error) {
     console.error("Error al guardar las páginas:", error);
