@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Film, Loader2, Trash2, Upload, X } from 'lucide-react';
 import type { SocialProfile } from '@/lib/types';
 import {
@@ -531,9 +532,15 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
 }
 
 export default function NewPostModal({ open, onClose, onCreated }: NewPostModalProps) {
-  if (!open) return null;
+  // El modal se monta en <body> porque el topbar tiene `backdrop-filter`, lo que
+  // lo convierte en containing block y rompe el `position: fixed` del overlay.
+  const [container] = useState<HTMLElement | null>(() =>
+    typeof document === 'undefined' ? null : document.body
+  );
 
-  return (
+  if (!open || !container) return null;
+
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -570,6 +577,7 @@ export default function NewPostModal({ open, onClose, onCreated }: NewPostModalP
       >
         <NewPostForm onClose={onClose} onCreated={onCreated} />
       </div>
-    </div>
+    </div>,
+    container
   );
 }
