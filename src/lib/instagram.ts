@@ -1,4 +1,5 @@
 import { FacebookApiError, graphRequest, listManagedPages } from "./facebook";
+import { POST_TYPE_STORY, isVideoUrl } from "./media";
 
 /** Máximo de items que acepta un carrusel de Instagram. */
 const MAX_CAROUSEL_ITEMS = 10;
@@ -78,10 +79,12 @@ export type InstagramPublishInput = {
   accessToken: string;
   caption: string;
   mediaUrls: string[];
+  /** `STORY` publica una Historia (sin texto y con un único medio). */
+  postType?: string;
 };
 
 function isVideo(url: string) {
-  return /\.(mp4|mov|m4v)(\?.*)?$/i.test(url);
+  return isVideoUrl(url);
 }
 
 function isHttp(url: string) {
@@ -167,18 +170,24 @@ export async function publishToInstagram({
   accessToken,
   caption,
   mediaUrls,
+  postType,
 }: InstagramPublishInput): Promise<{ externalPostId: string }> {
   const media = mediaUrls.filter(isHttp);
+  const isStory = postType === POST_TYPE_STORY;
 
   if (media.length === 0) {
     throw new FacebookApiError(
-      "Instagram requiere al menos una imagen o video: agregá la URL pública del medio en el post.",
+      "Instagram requiere al menos una imagen o video. Subí el archivo en el post.",
       400,
       100
     );
   }
 
-  if (media.length > MAX_CAROUSEL_ITEMS) {
+  if (isStory && media.length > 1) {
+    throw new FacebookApiError("Las Historias de Instagram admiten un solo archivo.", 400, 100);
+  }
+
+  if (!isStory && media.length > MAX_CAROUSEL_ITEMS) {
     throw new FacebookApiError(
       `Instagram acepta como máximo ${MAX_CAROUSEL_ITEMS} medios por publicación.`,
       400,
@@ -188,7 +197,18 @@ export async function publishToInstagram({
 
   let containerId: string;
 
-  if (media.length === 1) {
+  if (isStory) {
+    // La API de Historias no acepta caption ni carrusel.
+    const url = media[0];
+    containerId = await createContainer(
+      accessToken,
+      igUserId,
+      isVideo(url)
+        ? { media_type: "STORIES", video_url: url }
+        : { media_type: "STORIES", image_url: url }
+    );
+    await waitForContainer(containerId, accessToken);
+  } else if (media.length === 1) {
     const url = media[0];
     containerId = await createContainer(
       accessToken,

@@ -29,7 +29,7 @@ Flujo de uso en producción:
 | `/admin` | OK | Sólo `ADMIN`: crea cuentas (tenants), carga el App ID/Secret de Facebook de cada una y gestiona sus usuarios. |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
 | `/connections` | OK | Conexión OAuth con la app de Facebook **de la propia cuenta**, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. |
-| `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Muestra el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
+| `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Permite **subir imágenes y videos** (varios por publicación) y elegir entre **Publicación** o **Historia**. Muestra miniaturas, el tipo, el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
 | `/settings` | OK | Datos de la sesión, cierre de sesión y desconexión de perfiles. |
 | `/smartlink` | WIP | Constructor de página "link in bio". Solo estado en cliente (sin persistencia). |
 | `/inbox` | WIP | Placeholder de comentarios/mensajes. |
@@ -134,7 +134,8 @@ Modelos en `prisma/schema.prisma`:
 - `FbConnection`: token de usuario de Facebook por tenant (`userAccessToken`, `fbUserId`, `tokenExpiresAt`).
 - `User`, `Account`, `Session`, `VerificationToken`: `User` suma `passwordHash`, `role` (`ADMIN`/`CLIENT`) y `tenantId`; el resto es estándar de NextAuth.
 - `SocialProfile`: perfil conectado (`platform`, `profileId`, `parentProfileId` para el Instagram de una Página, tokens, `tokenExpiresAt`), único por `tenantId + platform + profileId`.
-- `Post`: contenido, `mediaUrls`, `scheduledFor`, `status`, `publishedAt`, `facebookPostId`, `errorMessage`, `attempts`, relación con `Tenant`, `User` y `SocialProfile`.
+- `Post`: contenido, `mediaUrls`, `postType` (`POST`/`STORY`), `scheduledFor`, `status`, `publishedAt`, `facebookPostId`, `errorMessage`, `attempts`, relación con `Tenant`, `User` y `SocialProfile`.
+- `MediaAsset`: archivo subido desde el calendario (`filename`, `mimeType`, `kind` `IMAGE`/`VIDEO`, `size`, `data` como `bytea`), aislado por `tenantId`. Se sirve públicamente en `/api/media/<id>/<filename>` y se borra junto con el post cuando ya no lo referencia ningún otro.
 
 Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate deploy`.
 
@@ -156,8 +157,10 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/instagram/save-accounts` | POST | Guarda las cuentas de Instagram seleccionadas como `SocialProfile` (`instagram_business`, con `parentProfileId`). |
 | `/api/profiles` | GET | Perfiles conectados del tenant. |
 | `/api/profiles/[id]` | DELETE | Desconecta un perfil. |
-| `/api/posts` | GET/POST | Lista y crea publicaciones. |
-| `/api/posts/[id]` | PATCH/DELETE | Reprograma (y reinicia intentos) o elimina una publicación. |
+| `/api/posts` | GET/POST | Lista y crea publicaciones (`content`, `mediaUrls`, `postType`, `socialProfileId`, `scheduledFor`). |
+| `/api/posts/[id]` | PATCH/DELETE | Reprograma (y reinicia intentos) o elimina una publicación (también borra sus medios). |
+| `/api/media` | POST/DELETE | Sube archivos (`multipart/form-data`, campo `files`) y devuelve `{ media: [{ id, url, filename, mimeType, kind, size }] }`; `DELETE` recibe `{ ids }` y elimina los medios del tenant. |
+| `/api/media/[id]/[filename]` | GET/HEAD | Sirve el archivo almacenado en la base (público, con `Cache-Control` inmutable). La extensión es obligatoria. |
 | `/api/posts/[id]/publish` | POST | Publica el post inmediatamente en la red del perfil (Página de Facebook o cuenta de Instagram). |
 | `/api/cron/publish` | GET/POST | Publica los posts vencidos. Requiere `Authorization: Bearer $CRON_SECRET`. |
 
@@ -166,8 +169,11 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 Los posts con estado `SCHEDULED` cuya `scheduledFor` ya pasó se envían a la red del perfil asociado mediante la Graph API (`src/lib/facebook.ts`, `src/lib/instagram.ts` y `src/lib/publisher.ts`). Para Páginas de Facebook:
 
 - sin media -> `POST /{page-id}/feed`,
-- 1 media -> `POST /{page-id}/photos`,
-- varias medias -> fotos con `published=false` y luego `/feed` con `attached_media`.
+- 1 imagen -> `POST /{page-id}/photos`,
+- 1 video -> `POST /{page-id}/videos` con `file_url`,
+- varias medias -> fotos/videos sin publicar (`published=false`) y luego `/feed` con `attached_media`.
+
+Las **Historias** sólo se publican en Instagram: si un post `STORY` apunta a una Página de Facebook, el publisher lo marca como `FAILED` con un error no reintentable (Meta no expone publicación de Stories para Páginas).
 
 Cada post pasa por `SCHEDULED -> PUBLISHING -> PUBLISHED | FAILED`. La toma del post es atómica (`updateMany` con `status: "SCHEDULED"`), por lo que varios workers o el scheduler interno más el cron externo nunca publican dos veces el mismo post. Los errores de red/5xx/rate-limit se reintentan hasta 3 veces (`attempts`); los de token o permisos (`190`, `100`, `200`) fallan de inmediato y quedan visibles en `/planning` junto al botón de reintento.
 
@@ -177,7 +183,8 @@ Las cuentas de Instagram Business/Creator se publican con la Instagram Graph API
 
 - 1 imagen -> `POST /{ig-user-id}/media` con `image_url` + `caption`,
 - 1 video (MP4/MOV) -> `media_type=REELS` con `video_url`,
-- 2 a 10 medios -> contenedores hijos (`is_carousel_item=true`) y luego `media_type=CAROUSEL`.
+- 2 a 10 medios -> contenedores hijos (`is_carousel_item=true`) y luego `media_type=CAROUSEL`,
+- Historia (`postType=STORY`) -> `media_type=STORIES` con `image_url` o `video_url`, **sin** `caption` y con **un único** medio (así lo exige la API).
 
 Después de crear el contenedor se consulta `status_code` hasta `FINISHED` (los videos tardan) y se publica con `media_publish`. Instagram **no permite publicaciones sin media**: la API rechaza el post y el formulario lo avisa antes de programar.
 
@@ -187,6 +194,19 @@ Existen dos disparadores, y puedes usar uno, otro o ambos:
 2. **Cron externo**: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<tu-dominio>/api/cron/publish`.
 
 Los posts que queden en `PUBLISHING` más de 10 minutos (por un reinicio a mitad de publicación) se devuelven a `SCHEDULED` automáticamente.
+
+## Medios subidos (imágenes y videos)
+
+En `/planning` los medios se suben como archivos, no como URLs:
+
+- **Imágenes**: JPG, PNG, WebP, HEIC/HEIF (se convierten a JPEG con `sharp`, máx. 2048 px y `quality` 90).
+- **Videos**: MP4 y MOV.
+- Hasta **10 medios por publicación** y **1 por historia**; máximo **16 MB por archivo**.
+- Los archivos se guardan en la base de datos (`MediaAsset.data` como `bytea`) y se sirven desde `/api/media/<id>/<filename>`. No hace falta volumen persistente en Docker: sobreviven a redeploys y a un contenedor nuevo.
+- Meta descarga el medio desde una **URL pública**, así que `NEXTAUTH_URL` debe ser el dominio real (`https://...`). Si no está definida se usa el host de la petición (`x-forwarded-host`), lo que puede fallar durante la subida detrás de proxies.
+- Cada archivo subido queda asociado al `tenantId` de la sesión; `DELETE /api/media` y el borrado del post lo eliminan también de la base.
+
+Límites y formatos aceptados están centralizados en `src/lib/media.ts` y `src/lib/post-validation.ts`.
 
 ## Despliegue (Docker / Coolify)
 

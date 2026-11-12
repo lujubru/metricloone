@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Clock, Plus, Filter, Trash2, Loader2, Send, RotateCcw, AlertCircle } from 'lucide-react';
+import { Clock, Plus, Filter, Trash2, Loader2, Send, RotateCcw, AlertCircle, Film as FilmIcon } from 'lucide-react';
 import NewPostModal from '@/components/NewPostModal';
+import { isVideoUrl } from '@/lib/media';
 import type { Post } from '@/lib/types';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -171,14 +172,14 @@ export default function Planning() {
                     fontSize: '0.7rem',
                     padding: '0.25rem 0.4rem',
                     borderRadius: '4px',
-                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                    color: 'var(--primary-color)',
+                    backgroundColor: p.postType === 'STORY' ? 'rgba(236, 72, 153, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                    color: p.postType === 'STORY' ? '#ec4899' : 'var(--primary-color)',
                     marginBottom: '0.25rem',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                   }}>
-                    {p.content}
+                    {p.postType === 'STORY' ? `Historia${p.content ? ` · ${p.content}` : ''}` : p.content}
                   </div>
                 ))}
                 {dayPosts.length > 3 && (
@@ -208,12 +209,26 @@ export default function Planning() {
             {posts.map((p) => (
               <div key={p.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', padding: '0.75rem', backgroundColor: 'var(--sidebar-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>{p.content}</div>
+                  <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>
+                    {p.content || (p.postType === 'STORY' ? 'Historia sin texto' : '(sin contenido)')}
+                  </div>
+                  <MediaThumbnails urls={p.mediaUrls || []} />
                   <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', flexWrap: 'wrap', alignItems: 'center' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                       <Clock size={14} /> {formatDate(p.scheduledFor)}
                     </span>
                     <span>{p.socialProfile?.username || p.socialProfile?.profileId || p.socialProfileId}</span>
+                    <span style={{
+                      color: p.postType === 'STORY' ? '#ec4899' : 'var(--text-secondary)',
+                      border: `1px solid ${p.postType === 'STORY' ? '#ec489955' : 'var(--border-color)'}`,
+                      backgroundColor: p.postType === 'STORY' ? 'rgba(236, 72, 153, 0.12)' : 'transparent',
+                      borderRadius: '999px',
+                      padding: '0.05rem 0.5rem',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                    }}>
+                      {p.postType === 'STORY' ? 'Historia' : 'Publicación'}
+                    </span>
                     <StatusBadge status={p.status} />
                     {p.status === 'PUBLISHED' && p.publishedAt && (
                       <span>Publicado el {formatDate(p.publishedAt)}</span>
@@ -268,6 +283,57 @@ export default function Planning() {
         @keyframes spin { 100% { transform: rotate(360deg); } }
       ` }} />
     </>
+  );
+}
+
+function MediaThumbnails({ urls }: { urls: string[] }) {
+  if (urls.length === 0) return null;
+
+  const visible = urls.slice(0, 6);
+  const hidden = urls.length - visible.length;
+
+  return (
+    <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      {visible.map((url) =>
+        isVideoUrl(url) ? (
+          <div
+            key={url}
+            title="Video"
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '6px',
+              backgroundColor: 'var(--card-bg)',
+              border: '1px solid var(--border-color)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <FilmIcon size={18} />
+          </div>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={url}
+            src={url}
+            alt=""
+            style={{
+              width: '44px',
+              height: '44px',
+              objectFit: 'cover',
+              borderRadius: '6px',
+              border: '1px solid var(--border-color)',
+              display: 'block',
+            }}
+          />
+        )
+      )}
+      {hidden > 0 && (
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>+{hidden}</span>
+      )}
+    </div>
   );
 }
 

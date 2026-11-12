@@ -1,3 +1,5 @@
+import { POST_TYPE_STORY, isVideoUrl } from "./media";
+
 const GRAPH_VERSION = process.env.FACEBOOK_GRAPH_VERSION || "v23.0";
 export const GRAPH_BASE_URL = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
@@ -263,18 +265,33 @@ export type PublishInput = {
   accessToken: string;
   message: string;
   mediaUrls: string[];
+  /** `STORY` no está soportado en Páginas de Facebook. */
+  postType?: string;
 };
 
 /**
- * Publica en una Página de Facebook. Sin media usa /feed, con una imagen usa
- * /photos y con varias sube fotos no publicadas y las adjunta al feed.
+ * Publica en una Página de Facebook. Sin media usa /feed, con un único archivo
+ * usa /photos o /videos y con varios sube los archivos sin publicar y los
+ * adjunta al feed.
+ *
+ * Las Historias sólo existen en Instagram: en Facebook el post falla con un
+ * error no reintentable para no quedar en un bucle de reintentos.
  */
 export async function publishToFacebookPage({
   pageId,
   accessToken,
   message,
   mediaUrls,
+  postType,
 }: PublishInput): Promise<{ externalPostId: string }> {
+  if (postType === POST_TYPE_STORY) {
+    throw new FacebookApiError(
+      "Las Historias sólo se pueden publicar en Instagram. Elegí Instagram o cambiá el tipo a Publicación.",
+      400,
+      100
+    );
+  }
+
   const media = mediaUrls.filter((url) => /^https?:\/\//i.test(url));
 
   if (media.length === 0) {
@@ -286,8 +303,19 @@ export async function publishToFacebookPage({
   }
 
   if (media.length === 1) {
+    const url = media[0];
+
+    if (isVideoUrl(url)) {
+      const video = await graphRequest<{ id: string }>(`/${pageId}/videos`, {
+        file_url: url,
+        description: message,
+        access_token: accessToken,
+      });
+      return { externalPostId: video.id };
+    }
+
     const data = await graphRequest<{ id: string; post_id?: string }>(`/${pageId}/photos`, {
-      url: media[0],
+      url,
       caption: message,
       access_token: accessToken,
     });
@@ -296,6 +324,16 @@ export async function publishToFacebookPage({
 
   const mediaIds: string[] = [];
   for (const url of media) {
+    if (isVideoUrl(url)) {
+      const video = await graphRequest<{ id: string }>(`/${pageId}/videos`, {
+        file_url: url,
+        published: "false",
+        access_token: accessToken,
+      });
+      mediaIds.push(video.id);
+      continue;
+    }
+
     const photo = await graphRequest<{ id: string }>(`/${pageId}/photos`, {
       url,
       published: "false",

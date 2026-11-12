@@ -75,7 +75,23 @@ model Tenant {
   users          User[]
   socialProfiles SocialProfile[]
   posts          Post[]
+  mediaAssets    MediaAsset[]
   fbConnection   FbConnection?
+}
+
+model MediaAsset {
+  id        String   @id @default(cuid())
+  tenantId  String
+  filename  String // nombre saneado, con extensión (se usa en la URL pública)
+  mimeType  String
+  kind      String // IMAGE | VIDEO
+  size      Int
+  data      Bytes // el archivo se guarda en la base para sobrevivir a los redeploys
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model FbConnection {
@@ -119,7 +135,8 @@ model Post {
   userId          String?
   socialProfileId String
   content         String    @db.Text
-  mediaUrls       String[] // Array of media URLs
+  mediaUrls       String[] // URLs públicas absolutas (archivos subidos o URLs externas)
+  postType        String    @default("POST") // POST | STORY
   scheduledFor    DateTime
   status          String    @default("DRAFT") // DRAFT, SCHEDULED, PUBLISHING, PUBLISHED, FAILED
   publishedAt     DateTime?

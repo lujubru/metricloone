@@ -27,6 +27,7 @@ type PublishablePost = {
   id: string;
   content: string;
   mediaUrls: string[];
+  postType: string;
   attempts: number;
   socialProfile: {
     platform: string;
@@ -66,6 +67,7 @@ async function send(post: PublishablePost) {
       accessToken,
       message: post.content,
       mediaUrls: post.mediaUrls,
+      postType: post.postType,
     });
   }
 
@@ -75,6 +77,7 @@ async function send(post: PublishablePost) {
       accessToken,
       caption: post.content,
       mediaUrls: post.mediaUrls,
+      postType: post.postType,
     });
   }
 
@@ -210,6 +213,7 @@ export async function publishPostById(
     id: post.id,
     content: post.content,
     mediaUrls: post.mediaUrls,
+    postType: post.postType,
     attempts: post.status === "FAILED" ? 0 : post.attempts,
     socialProfile: post.socialProfile,
   });

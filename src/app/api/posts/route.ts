@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
-import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
+import { validatePostPayload } from "@/lib/post-validation";
 
 export const dynamic = "force-dynamic";
 
@@ -29,11 +29,7 @@ export async function POST(req: Request) {
     if ("response" in auth) return auth.response;
 
     const body = await req.json();
-    const { content, scheduledFor, socialProfileId, mediaUrls } = body || {};
-
-    if (!content || typeof content !== "string" || !content.trim()) {
-      return badRequest("El contenido es obligatorio");
-    }
+    const { content, scheduledFor, socialProfileId, mediaUrls, postType } = body || {};
 
     if (!socialProfileId) {
       return badRequest("Debes seleccionar un perfil");
@@ -52,26 +48,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Perfil no encontrado" }, { status: 404 });
     }
 
-    const cleanMediaUrls = Array.isArray(mediaUrls)
-      ? mediaUrls.filter(
-          (m: unknown): m is string => typeof m === "string" && /^https?:\/\//i.test(m)
-        )
-      : [];
+    const validated = validatePostPayload({
+      content,
+      mediaUrls,
+      postType,
+      platform: profile.platform,
+      req,
+    });
 
-    // Instagram no permite publicaciones sin imagen o video.
-    if (profile.platform === INSTAGRAM_PLATFORM && cleanMediaUrls.length === 0) {
-      return badRequest(
-        "Instagram requiere al menos una imagen o video: agregá la URL pública del medio."
-      );
-    }
+    if ("error" in validated) return badRequest(validated.error);
 
     const post = await prisma.post.create({
       data: {
         tenantId: auth.tenantId,
         userId: auth.user.id,
         socialProfileId,
-        content: content.trim(),
-        mediaUrls: cleanMediaUrls,
+        content: validated.value.content,
+        mediaUrls: validated.value.mediaUrls,
+        postType: validated.value.postType,
         scheduledFor: new Date(scheduledFor),
         status: "SCHEDULED",
       },

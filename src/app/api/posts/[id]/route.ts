@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
-import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
+import { validatePostPayload } from "@/lib/post-validation";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
 
     const { id } = await context.params;
     const body = await req.json().catch(() => null);
-    const { scheduledFor, content, mediaUrls } = body || {};
+    const { scheduledFor, content, mediaUrls, postType } = body || {};
 
     const post = await prisma.post.findFirst({ where: { id, tenantId: auth.tenantId } });
     if (!post) return notFound();
@@ -38,6 +38,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
       scheduledFor?: Date;
       content?: string;
       mediaUrls?: string[];
+      postType?: string;
     } = { status: "SCHEDULED", errorMessage: null };
 
     if (scheduledFor !== undefined) {
@@ -46,28 +47,23 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
       data.scheduledFor = date;
     }
 
-    if (content !== undefined) {
-      if (typeof content !== "string" || !content.trim()) return badRequest("El contenido es obligatorio");
-      data.content = content.trim();
-    }
-
-    if (Array.isArray(mediaUrls)) {
-      data.mediaUrls = mediaUrls.filter(
-        (media): media is string => typeof media === "string" && /^https?:\/\//i.test(media)
-      );
-    }
-
     const profile = await prisma.socialProfile.findUnique({
       where: { id: post.socialProfileId },
     });
 
-    const finalMedia = data.mediaUrls ?? post.mediaUrls;
+    const validated = validatePostPayload({
+      content: content !== undefined ? content : post.content,
+      mediaUrls: mediaUrls !== undefined ? mediaUrls : post.mediaUrls,
+      postType: postType !== undefined ? postType : post.postType,
+      platform: profile?.platform ?? null,
+      req,
+    });
 
-    if (profile?.platform === INSTAGRAM_PLATFORM && finalMedia.length === 0) {
-      return badRequest(
-        "Instagram requiere al menos una imagen o video: agregá la URL pública del medio."
-      );
-    }
+    if ("error" in validated) return badRequest(validated.error);
+
+    data.content = validated.value.content;
+    data.mediaUrls = validated.value.mediaUrls;
+    data.postType = validated.value.postType;
 
     // Reprogramar un post fallido reinicia el contador de intentos.
     const updated = await prisma.post.update({
@@ -96,6 +92,17 @@ export async function DELETE(_req: Request, context: { params: Promise<{ id: str
     if (!post) return notFound();
 
     await prisma.post.delete({ where: { id } });
+
+    // Los medios subidos para este post ya no se usan: liberamos el espacio.
+    const assetIds = post.mediaUrls
+      .map((url) => url.match(/\/api\/media\/([^/]+)\//)?.[1])
+      .filter((value): value is string => Boolean(value));
+
+    if (assetIds.length > 0) {
+      await prisma.mediaAsset.deleteMany({
+        where: { id: { in: assetIds }, tenantId: auth.tenantId },
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

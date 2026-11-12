@@ -1,8 +1,27 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Film, Loader2, Trash2, Upload, X } from 'lucide-react';
 import type { SocialProfile } from '@/lib/types';
+import {
+  MAX_MEDIA_ITEMS,
+  MAX_STORY_MEDIA_ITEMS,
+  MEDIA_ACCEPT_ATTRIBUTE,
+  MEDIA_MAX_FILE_MB,
+  POST_TYPE_POST,
+  POST_TYPE_STORY,
+  mediaKindFromFilename,
+  mediaKindFromMime,
+  type PostType,
+  type UploadedMedia,
+} from '@/lib/media';
+
+const MAX_FILE_BYTES = MEDIA_MAX_FILE_MB * 1024 * 1024;
+
+function formatSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 type NewPostModalProps = {
   open: boolean;
@@ -20,12 +39,23 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
     soon.setMinutes(soon.getMinutes() - soon.getTimezoneOffset());
     return soon.toISOString().slice(0, 16);
   });
-  const [mediaUrls, setMediaUrls] = useState('');
+  const [media, setMedia] = useState<UploadedMedia[]>([]);
+  const [postType, setPostType] = useState<PostType>(POST_TYPE_POST);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaIdsRef = useRef<string[]>([]);
+  const mediaSavedRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const selectedProfile = profiles.find((p) => p.id === socialProfileId);
-  const needsMedia = selectedProfile?.platform === 'instagram_business';
+  const isInstagram = selectedProfile?.platform === 'instagram_business';
+  // Las Historias sólo existen en Instagram: en otras plataformas se usa Publicación.
+  const effectivePostType: PostType = isInstagram ? postType : POST_TYPE_POST;
+  const isStory = effectivePostType === POST_TYPE_STORY;
+  const needsMedia = isInstagram;
+  const maxMediaItems = isStory ? MAX_STORY_MEDIA_ITEMS : MAX_MEDIA_ITEMS;
 
   useEffect(() => {
     let ignore = false;
@@ -59,21 +89,139 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
+  useEffect(() => {
+    mediaIdsRef.current = media.map((item) => item.id);
+  }, [media]);
+
+  // Si el modal se cierra sin programar el post, los archivos ya subidos se
+  // descartan para no dejar medios huérfanos en la base.
+  useEffect(() => {
+    return () => {
+      if (mediaSavedRef.current) return;
+      const ids = mediaIdsRef.current;
+      if (ids.length === 0) return;
+      void fetch('/api/media', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+  }, []);
+
+  const removeMedia = (ids: string[]) => {
+    setMedia((current) => current.filter((item) => !ids.includes(item.id)));
+    // Libera el espacio de los archivos que el usuario descartó.
+    void fetch('/api/media', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }).catch(() => undefined);
+  };
+
+  const handlePostTypeChange = (next: PostType) => {
+    if (next === postType) return;
+    setError('');
+    setPostType(next);
+
+    if (next === POST_TYPE_STORY && media.length > MAX_STORY_MEDIA_ITEMS) {
+      const keep = media.slice(0, MAX_STORY_MEDIA_ITEMS);
+      const discard = media.slice(MAX_STORY_MEDIA_ITEMS);
+      setMedia(keep);
+      void fetch('/api/media', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: discard.map((item) => item.id) }),
+      }).catch(() => undefined);
+    }
+  };
+
+  const uploadFiles = async (fileList: FileList | null) => {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) return;
+
     setError('');
 
-    const urlList = mediaUrls
-      .split(',')
-      .map((u) => u.trim())
-      .filter(Boolean);
-
-    if (needsMedia && urlList.length === 0) {
-      setSaving(false);
-      setError('Instagram necesita al menos una imagen o video: agregá la URL pública del medio.');
+    const remaining = maxMediaItems - media.length;
+    if (remaining <= 0) {
+      setError(
+        isStory
+          ? 'Una Historia admite un solo archivo. Quitá el actual para subir otro.'
+          : `Ya tenés ${MAX_MEDIA_ITEMS} archivos, que es el máximo por publicación.`
+      );
       return;
     }
+
+    const accepted: File[] = [];
+
+    for (const file of files.slice(0, remaining)) {
+      const kind = mediaKindFromMime(file.type) ?? mediaKindFromFilename(file.name);
+      if (!kind) {
+        setError(`"${file.name}" no es un formato soportado. Usá JPG, PNG, WEBP, MP4 o MOV.`);
+        return;
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        setError(`"${file.name}" pesa ${formatSize(file.size)} y el máximo por archivo es ${MEDIA_MAX_FILE_MB} MB.`);
+        return;
+      }
+      accepted.push(file);
+    }
+
+    if (files.length > remaining) {
+      setError(
+        isStory
+          ? 'Una Historia admite un solo archivo; se subió el primero.'
+          : `Sólo se pueden adjuntar ${MAX_MEDIA_ITEMS} archivos por publicación.`
+      );
+    }
+
+    const form = new FormData();
+    accepted.forEach((file) => form.append('files', file));
+
+    setUploading(true);
+    try {
+      const res = await fetch('/api/media', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setError(data.error || 'No se pudieron subir los archivos.');
+      } else {
+        const uploaded: UploadedMedia[] = data.media || [];
+        setMedia((current) => [...current, ...uploaded].slice(0, maxMediaItems));
+      }
+    } catch {
+      setError('Error de red al subir los archivos.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!socialProfileId) {
+      setError('Seleccioná un perfil.');
+      return;
+    }
+
+    if (isStory && media.length !== MAX_STORY_MEDIA_ITEMS) {
+      setError('Una Historia necesita exactamente una imagen o un video.');
+      return;
+    }
+
+    if (needsMedia && media.length === 0) {
+      setError('Instagram necesita al menos una imagen o video: subí un archivo.');
+      return;
+    }
+
+    if (!isStory && !content.trim()) {
+      setError('El contenido es obligatorio.');
+      return;
+    }
+
+    setSaving(true);
 
     try {
       const res = await fetch('/api/posts', {
@@ -83,7 +231,8 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
           content,
           socialProfileId,
           scheduledFor: new Date(scheduledFor).toISOString(),
-          mediaUrls: urlList,
+          mediaUrls: media.map((item) => item.url),
+          postType: effectivePostType,
         }),
       });
 
@@ -92,8 +241,9 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
       if (!res.ok) {
         setError(data.error || 'No se pudo crear el post.');
       } else {
+        mediaSavedRef.current = true;
         setContent('');
-        setMediaUrls('');
+        setMedia([]);
         onCreated();
         onClose();
       }
@@ -150,13 +300,60 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>Contenido</label>
+          <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>Tipo de publicación</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {[
+              { value: POST_TYPE_POST as PostType, label: 'Publicación' },
+              { value: POST_TYPE_STORY as PostType, label: 'Historia' },
+            ].map((option) => {
+              const active = effectivePostType === option.value;
+              const disabled = option.value === POST_TYPE_STORY && !isInstagram;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handlePostTypeChange(option.value)}
+                  disabled={disabled}
+                  title={disabled ? 'Las Historias sólo se publican en Instagram' : undefined}
+                  style={{
+                    flex: 1,
+                    padding: '0.55rem 0.75rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: `1px solid ${active ? 'var(--primary-color)' : 'var(--border-color)'}`,
+                    backgroundColor: active ? 'rgba(59, 130, 246, 0.15)' : 'var(--sidebar-bg)',
+                    color: disabled ? 'var(--text-secondary)' : 'var(--text-primary)',
+                    fontWeight: active ? 600 : 400,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.6 : 1,
+                  }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          {isStory && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Las Historias de Instagram no llevan texto ni carrusel: subí una imagen o un video y se publican como Historia.
+            </span>
+          )}
+          {!isStory && isInstagram && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Publicación normal: carrusel de hasta {MAX_MEDIA_ITEMS} archivos.
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>
+            Contenido {isStory ? '(no se usa en Historias)' : ''}
+          </label>
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            required
-            rows={5}
-            placeholder="Escribe el contenido de tu publicación..."
+            required={!isStory}
+            rows={isStory ? 3 : 5}
+            placeholder={isStory ? 'Las Historias no llevan texto, este campo se ignora.' : 'Escribe el contenido de tu publicación...'}
             style={{
               padding: '0.75rem',
               borderRadius: 'var(--radius-md)',
@@ -191,25 +388,127 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <label style={{ fontSize: '0.875rem', fontWeight: 500 }}>
-            URLs de medios {needsMedia ? '(obligatorio para Instagram)' : '(opcional, separadas por coma)'}
+            {isStory ? 'Imagen o video' : 'Imágenes y videos'}{' '}
+            {needsMedia ? '(obligatorio para Instagram)' : '(opcional)'}
           </label>
-          <input
-            type="text"
-            value={mediaUrls}
-            onChange={(e) => setMediaUrls(e.target.value)}
-            placeholder="https://..."
-            required={needsMedia}
-            style={{
-              padding: '0.6rem 0.75rem',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-color)',
-              backgroundColor: 'var(--sidebar-bg)',
-              color: 'var(--text-primary)',
+
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
             }}
-          />
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              void uploadFiles(e.dataTransfer.files);
+            }}
+            style={{
+              border: `1px dashed ${dragging ? 'var(--primary-color)' : 'var(--border-color)'}`,
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: dragging ? 'rgba(59, 130, 246, 0.08)' : 'var(--sidebar-bg)',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '0.5rem',
+              textAlign: 'center',
+            }}
+          >
+            <Upload size={20} style={{ color: 'var(--text-secondary)' }} />
+            <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+              Arrastrá los archivos acá o
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || media.length >= maxMediaItems}
+            >
+              {uploading ? 'Subiendo...' : 'Elegir archivos'}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={MEDIA_ACCEPT_ATTRIBUTE}
+              multiple={!isStory}
+              onChange={(e) => void uploadFiles(e.target.files)}
+              style={{ display: 'none' }}
+            />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              JPG, PNG, WEBP, MP4 o MOV · hasta {MEDIA_MAX_FILE_MB} MB por archivo ·{' '}
+              {media.length}/{maxMediaItems}
+            </span>
+          </div>
+
+          {uploading && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+              <Loader2 size={14} style={{ animation: 'spin 2s linear infinite' }} /> Procesando archivos...
+            </span>
+          )}
+
+          {media.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: '0.5rem', marginTop: '0.25rem' }}>
+              {media.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    position: 'relative',
+                    borderRadius: 'var(--radius-md)',
+                    overflow: 'hidden',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: '#0f172a',
+                    aspectRatio: '1 / 1',
+                  }}
+                >
+                  {item.kind === 'VIDEO' ? (
+                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.25rem', color: 'var(--text-secondary)' }}>
+                      <Film size={20} />
+                      <span style={{ fontSize: '0.625rem', padding: '0 0.25rem', textAlign: 'center', wordBreak: 'break-all' }}>
+                        {formatSize(item.size)}
+                      </span>
+                    </div>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={item.url}
+                      alt={item.filename}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeMedia([item.id])}
+                    aria-label={`Quitar ${item.filename}`}
+                    title={`Quitar ${item.filename}`}
+                    style={{
+                      position: 'absolute',
+                      top: 2,
+                      right: 2,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 22,
+                      height: 22,
+                      borderRadius: '50%',
+                      border: 'none',
+                      backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {needsMedia && (
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Instagram no permite publicaciones solo de texto. Usá una imagen JPG pública (hasta 10 para carrusel) o un MP4/MOV para Reels.
+              {isStory
+                ? 'Las Historias llevan un solo archivo. Instagram descarga el video desde esta app, por eso los archivos quedan guardados acá.'
+                : 'Instagram no permite publicaciones sólo de texto. Las imágenes se convierten a JPG y podés mezclar hasta 10 fotos y videos en un carrusel.'}
             </span>
           )}
         </div>

@@ -20,6 +20,8 @@ export type Post = {
   socialProfileId: string;
   content: string;
   mediaUrls: string[];
+  /** `POST` (publicación normal) o `STORY` (Historia de Instagram). */
+  postType?: string;
   scheduledFor: string;
   status: string;
   publishedAt: string | null;
