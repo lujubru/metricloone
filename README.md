@@ -11,6 +11,8 @@ Clon funcional (MVP) de Metricool: panel para conectar perfiles sociales, planif
 | Base de datos | PostgreSQL en **Railway** (externa a Coolify) |
 | Login | email + contraseña (`/login`), roles `ADMIN` / `CLIENT` |
 | Multi-tenant | activo desde el commit `d147457` (deploy verificado el 7/11/2026) |
+| Instagram | publica imágenes, carruseles (2 a 10) y Reels/Historias. Desde `94ebc54` los medios se recortan a 4:5 – 1.91:1 al servirse (`?ig=feed`), funcionando en producción con fotos verticales de celular. |
+| CDN | **Cloudflare** delante de Coolify. Cachea `/api/media/...`, así que después de un deploy puede seguir sirviendo una respuesta vieja (purgar la URL al cambiar el recorte). |
 
 Flujo de uso en producción:
 
@@ -165,7 +167,7 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/posts` | GET/POST | Lista y crea publicaciones (`content`, `mediaUrls`, `postType`, `socialProfileId`, `scheduledFor`). |
 | `/api/posts/[id]` | PATCH/DELETE | Reprograma (y reinicia intentos) o elimina una publicación (también borra sus medios). |
 | `/api/media` | POST/DELETE | Sube archivos (`multipart/form-data`, campo `files`) y devuelve `{ media: [{ id, url, filename, mimeType, kind, size }] }`; `DELETE` recibe `{ ids }` y elimina los medios del tenant. |
-| `/api/media/[id]/[filename]` | GET/HEAD | Sirve el archivo almacenado en la base (público, con `Cache-Control` inmutable). La extensión es obligatoria. |
+| `/api/media/[id]/[filename]` | GET/HEAD | Sirve el archivo almacenado en la base (público, con `Cache-Control` inmutable). La extensión es obligatoria. Con `?ig=feed` devuelve la imagen recortada a 4:5 – 1.91:1 para el feed de Instagram (ver [Relación de aspecto](#relación-de-aspecto-recorte-para-el-feed)). |
 | `/api/posts/[id]/publish` | POST | Publica el post inmediatamente en la red del perfil (Página de Facebook o cuenta de Instagram). |
 | `/api/cron/publish` | GET/POST | Publica los posts vencidos. Requiere `Authorization: Bearer $CRON_SECRET`. |
 
@@ -200,14 +202,78 @@ Las cuentas de Instagram Business/Creator se publican con la Instagram Graph API
 
 Después de crear el contenedor se consulta `status_code` hasta `FINISHED` (los videos tardan) y se publica con `media_publish`. Instagram **no permite publicaciones sin media**: la API rechaza el post y el formulario lo avisa antes de programar.
 
-**Relación de aspecto.** El feed de Instagram sólo acepta imágenes entre **4:5 y 1.91:1**; fuera de ese rango el contenedor falla con `The aspect ratio is not supported` (lo típico son fotos verticales de celular, 9:16, o panorámicas). Por eso el publisher no pasa la URL del archivo tal cual: para los medios que sirve esta app pide `?ig=feed` y `/api/media/<id>/<filename>` devuelve la imagen recortada al centro con `sharp` (`fitImageForInstagramFeed` en `src/lib/image-processing.ts`) antes de entregársela a Meta. El recorte es al vuelo y sólo re-codifica las imágenes que están fuera de rango, así también se publican los archivos subidos antes de este cambio sin migrar la base. Las **Historias no se recortan**: ahí 9:16 es el formato correcto.
-
 Existen dos disparadores, y puedes usar uno, otro o ambos:
 
 1. **Scheduler interno** (`src/instrumentation.ts`): arranca con el servidor en producción y ejecuta `publishDuePosts()` cada `PUBLISH_INTERVAL_SECONDS`.
-2. **Cron externo**: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<tu-dominio>/api/cron/publish`.
+2. **Cron externo**: `curl -X POST -H "Authorization: ******" https://<tu-dominio>/api/cron/publish`.
 
 Los posts que queden en `PUBLISHING` más de 10 minutos (por un reinicio a mitad de publicación) se devuelven a `SCHEDULED` automáticamente.
+
+#### Relación de aspecto (recorte para el feed)
+
+El feed de Instagram **sólo acepta imágenes con relación de aspecto entre 4:5 (0.8) y 1.91:1**. Fuera de ese rango el contenedor hijo falla con `The aspect ratio is not supported` (Graph API `code 100`), el post queda `FAILED` y — como los errores `100` no son reintentables — no se arregla solo.
+
+El caso real que originó esta lógica: un carrusel de 3 fotos verticales de celular guardadas como `984x1600` (0.615), `990x1600` (0.619) y `866x1600` (0.541). Las tres estaban muy por debajo de 0.8, así que Meta rechazaba el carrusel aunque las imágenes pesaran poco y fueran JPEG válidos.
+
+Cómo se resuelve: el recorte se aplica **al servir el archivo**, no al subirlo.
+
+```mermaid
+flowchart LR
+  A["Post SCHEDULED"] --> B["publishToInstagram"]
+  B --> C{"imagen servida por la app?"}
+  C -- "si" --> D["image_url = /api/media/...?ig=feed"]
+  C -- "no (URL externa)" --> E["image_url = URL original"]
+  D --> F["Meta descarga la URL"]
+  F --> G["/api/media/[id]/[filename]?ig=feed"]
+  G --> H{"ratio entre 0.8 y 1.91?"}
+  H -- "si" --> I["sirve el archivo original sin re-comprimir"]
+  H -- "no" --> J["sharp: autoOrient + extract centrado"]
+  J --> K["JPEG q90 a max 2048 px"]
+  I --> L["contenedor hijo FINISHED"]
+  K --> L
+  L --> M["media_publish"]
+```
+
+Contrato del parámetro `?ig=feed` en `GET /api/media/<id>/<filename>`:
+
+- Sólo actúa sobre `kind/mimeType` de imagen; los videos se sirven igual que siempre.
+- Si la imagen ya está dentro del rango, devuelve **los bytes originales sin re-codificar** (no se pierde calidad ni se altera el archivo guardado).
+- Si está fuera de rango, devuelve un JPEG recortado al centro: `autoOrient()` primero (para que el recorte use las coordenadas de la imagen ya rotada por EXIF) y después `extract` con el rectángulo calculado por `instagramFeedCrop`.
+- Cabeceras: `Content-Type: image/jpeg` y `Cache-Control: public, max-age=604800` en la variante recortada; el archivo original conserva `immutable, max-age=31536000`. `Content-Length`, `Content-Disposition` y el `HEAD` se mantienen.
+- Si `sharp` falla con un archivo corrupto se sirve el original y se loguea `[media] No pudimos recortar …`; Meta devuelve entonces su propio error.
+
+Por qué no se recorta en la subida (`POST /api/media`):
+
+- Las **Historias** sí necesitan 9:16; recortar al subir rompería el único formato correcto para ellas.
+- Recortar al servir arregla también los archivos ya guardados, sin migración ni reproceso de `MediaAsset.data` (el bytea queda intacto y el recorte es determinista).
+
+Archivos involucrados:
+
+| Archivo | Responsabilidad |
+| --- | --- |
+| `src/lib/media.ts` | `INSTAGRAM_MIN_ASPECT_RATIO` / `INSTAGRAM_MAX_ASPECT_RATIO`, `isAppMediaUrl`, `isSupportedInstagramFeedRatio`, `instagramFeedCrop` (recorte centrado, sin `sharp` para poder usarse en el cliente). |
+| `src/lib/image-processing.ts` | `fitImageForInstagramFeed` (server-only) y `MAX_IMAGE_DIMENSION = 2048`, compartido con la subida. |
+| `src/app/api/media/[id]/[filename]/route.ts` | Lee `?ig=feed` y sirve la variante recortada con fallback al original. |
+| `src/lib/instagram.ts` | `feedImageUrl()` agrega el parámetro en el post de 1 imagen y en cada hijo del carrusel. |
+| `src/app/api/media/route.ts` | Subida: normaliza a JPEG sin tocar la proporción (sólo comparte `MAX_IMAGE_DIMENSION`). |
+
+Qué **no** se recorta: Historias (`media_type=STORIES`), videos/Reels y las URLs externas (cualquier `image_url` que no sea `/api/media/...`), porque desde la app no se pueden reescribir. `instagramFeedCrop` tampoco hace nada si la imagen no reporta ancho/alto.
+
+Verificar que el deploy tiene el fix:
+
+```bash
+# 1) el tamaño debe cambiar entre el original y la variante de feed
+curl -s -o a.jpg "https://<dominio>/api/media/<id>/<archivo>.jpg"
+curl -s -o b.jpg "https://<dominio>/api/media/<id>/<archivo>.jpg?ig=feed"
+ls -l a.jpg b.jpg
+
+# 2) la cabecera de la variante recortada es max-age=604800 (no immutable)
+curl -sI "https://<dominio>/api/media/<id>/<archivo>.jpg?ig=feed" | grep -i cache-control
+```
+
+Si ambos archivos pesan lo mismo puede ser (a) el deploy todavía no tiene el cambio, (b) la imagen ya estaba dentro del rango, o (c) **Cloudflare sirvió la respuesta desde caché**. Producción está detrás de Cloudflare (`cf-cache-status: HIT`) y las URLs de medios se cachean durante mucho tiempo, así que una respuesta vieja de `?ig=feed` puede quedar fijada: purgar la URL en Cloudflare (o pedirla con un `&cb=<aleatorio>`) para confirmar. Si cambia el algoritmo de recorte hay que purgar la caché o subir el valor del parámetro (por ejemplo `ig=feed2`) para invalidar las variantes guardadas.
+
+Los posts que ya quedaron `FAILED` con este error **no se reintentan solos**: hay que usar el botón de reintento de `/planning` después del deploy.
 
 ## Calendario (`/planning`)
 
@@ -220,7 +286,7 @@ Los posts que queden en `PUBLISHING` más de 10 minutos (por un reinicio a mitad
 
 En `/planning` los medios se suben como archivos, no como URLs:
 
-- **Imágenes**: JPG, PNG, WebP, HEIC/HEIF (se convierten a JPEG con `sharp`, máx. 2048 px y `quality` 90 y se guardan con su proporción original). El recorte a 4:5–1.91:1 que exige el feed de Instagram se aplica **al servir** el archivo con `?ig=feed`, no al subirlo, para no romper las Historias.
+- **Imágenes**: JPG, PNG, WebP, HEIC/HEIF (se convierten a JPEG con `sharp`, máx. 2048 px y `quality` 90 y se guardan con su proporción original). El recorte a 4:5–1.91:1 que exige el feed de Instagram se aplica **al servir** el archivo con `?ig=feed`, no al subirlo, para no romper las Historias (ver [Relación de aspecto](#relación-de-aspecto-recorte-para-el-feed)).
 - **Videos**: MP4 y MOV.
 - Hasta **10 medios por publicación** y **1 por historia**; máximo **16 MB por archivo**.
 - Los archivos se guardan en la base de datos (`MediaAsset.data` como `bytea`) y se sirven desde `/api/media/<id>/<filename>`. No hace falta volumen persistente en Docker: sobreviven a redeploys y a un contenedor nuevo.
@@ -376,7 +442,7 @@ Casos reales encontrados durante el despliegue y la puesta en marcha:
 | Meta rechaza el ícono de la app | El PNG tenía canal alfa (`colorType=6`). | Exportarlo en truecolor sin alfa (`colorType=2`). El archivo bueno es `public/app-icon-1024.png`. |
 | Al importar sólo aparecen algunas Páginas de Facebook | El diálogo de Login autoriza Página por Página y/o el token es anterior a los permisos actuales. | Ver *Páginas que no aparecen al importar*. |
 | Instagram no muestra cuentas | No hay cuentas Business/Creator vinculadas a las Páginas **ya conectadas**, o falta `instagram_basic`. | Conectar primero la Página en `/connections` y reconectar Facebook para autorizar el permiso. |
-| Post de Instagram falla con `The aspect ratio is not supported` | La imagen estaba fuera del rango 4:5 – 1.91:1 (foto vertical de celular, panorámica). | Ya se corrige solo: el publisher pide `?ig=feed` y el archivo se recorta al servir. En posts que ya quedaron `FAILED` hay que reintentar desde `/planning`. Sólo persiste si el medio es una **URL externa** (no `/api/media/...`): ahí el recorte no se puede aplicar. |
+| Post de Instagram falla con `The aspect ratio is not supported` | La imagen estaba fuera del rango 4:5 – 1.91:1 (foto vertical de celular, panorámica). | Ya se corrige solo: el publisher pide `?ig=feed` y el archivo se recorta al servir. En posts que ya quedaron `FAILED` hay que reintentar desde `/planning`. Si sigue fallando, revisar que el deploy incluya `src/lib/image-processing.ts` y que Cloudflare no esté sirviendo una variante vieja de `?ig=feed`. Sólo persiste de forma permanente si el medio es una **URL externa** (no `/api/media/...`): ahí el recorte no se puede aplicar. |
 | "Se produjo un error. Actualiza la página o cierra y vuelve a abrir la ventana del navegador" al subir una imagen | Es un error genérico del SDK de Facebook dentro del modal de publicación. | Recargar y reintentar; si persiste, revisar la consola del navegador y los scopes del token. |
 | El **Inbox** no recibe nada | Falta configurar el webhook, o el token guardado es anterior a los permisos de mensajería. | Definir `META_WEBHOOK_VERIFY_TOKEN`, cargar la Callback URL y el Verify token en la app de Meta, y reconectar Facebook para autorizar `pages_messaging` / `pages_read_user_content` / `instagram_manage_*`. Mientras tanto se puede forzar con *Actualizar*. |
 | `GET /api/webhooks/meta` devuelve 500 | `META_WEBHOOK_VERIFY_TOKEN` no está definida en el entorno. | Cargarla y redeployar; el setup en `/inbox` -> *Webhooks* lo muestra como `verifyTokenConfigured: false`. |
@@ -396,6 +462,8 @@ Cosas que no son obvias y conviene recordar antes de tocar el código:
 - **`User` no tiene `createdAt`**: cualquier `orderBy`/`select` sobre `User` debe usar `name`; usar `createdAt` rompe los tipos de Prisma con un error confuso.
 - **El `tenantId` sale siempre del JWT**, nunca del body; `/api/facebook/save-pages` y `/api/instagram/save-accounts` revalidan contra la Graph API antes de guardar.
 - El scheduler interno (`src/instrumentation.ts`) publica para **todos** los tenants; se apaga con `SCHEDULER_ENABLED=false` y no corre durante el build.
+- **Los medios tienen dos variantes**: el original (`/api/media/<id>/<filename>`, `immutable`) y la de feed (`?ig=feed`, `max-age=604800`) que devuelve el recorte para Instagram. Si tocás `instagramFeedCrop` o `fitImageForInstagramFeed`, purgá Cloudflare o cambiá el valor del parámetro: las variantes viejas quedan cacheadas y Meta seguiría recibiendo el recorte anterior.
+- **`sharp` sólo se importa en el servidor** (`src/lib/image-processing.ts`, la ruta de subida y la de medios). `src/lib/media.ts` es compartido con componentes cliente, así que ahí sólo viven constantes y la matemática del recorte.
 
 Validación local antes de pushear:
 
@@ -417,6 +485,7 @@ npm run build
 | `e93845d` | Calendario: vistas Día/Semana/Mes, filtros funcionales y fix del botón «Nuevo post» del topbar. |
 | `4ae4d3a` | Inbox: los DM se envían desde la Página y un `code 10` ya no corta el reintento con `HUMAN_AGENT`. |
 | `2b97a1c` | Inbox: la bandeja deja de enviar respuestas y abre la conversación en la red social (*Abrir en Instagram / Facebook*). Desplegado y validado en producción. |
+| `94ebc54` | Instagram: recorte automático a 4:5 – 1.91:1 al servir los medios (`?ig=feed` + `fitImageForInstagramFeed`) para que los carruseles de fotos verticales de celular dejen de fallar con `The aspect ratio is not supported`. Las Historias y los videos no se tocan. Desplegado y validado en producción. |
 
 ## Pendientes
 
