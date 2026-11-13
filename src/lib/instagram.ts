@@ -1,5 +1,5 @@
 import { FacebookApiError, graphRequest, listManagedPages } from "./facebook";
-import { POST_TYPE_STORY, isVideoUrl } from "./media";
+import { POST_TYPE_STORY, isAppMediaUrl, isVideoUrl } from "./media";
 
 /** Máximo de items que acepta un carrusel de Instagram. */
 const MAX_CAROUSEL_ITEMS = 10;
@@ -91,6 +91,23 @@ function isHttp(url: string) {
   return /^https?:\/\//i.test(url);
 }
 
+/**
+ * Instagram sólo acepta imágenes de feed con relación de aspecto entre 4:5 y
+ * 1.91:1; fuera de ese rango devuelve «The aspect ratio is not supported».
+ * Para los archivos que sirve esta app pedimos la variante ya recortada al
+ * endpoint de medios. Las URLs externas se envían sin cambios.
+ */
+function feedImageUrl(url: string) {
+  if (!isAppMediaUrl(url)) return url;
+
+  const parsed = new URL(url, "http://localhost");
+  parsed.searchParams.set("ig", "feed");
+
+  const isAbsolute = isHttp(url);
+  const path = `${parsed.pathname}${parsed.search}`;
+  return isAbsolute ? `${parsed.origin}${path}` : path;
+}
+
 type ContainerStatus = { status_code?: string; status?: string };
 
 /** Espera a que Instagram termine de procesar el contenedor (videos tardan). */
@@ -141,7 +158,7 @@ async function createCarousel(accessToken: string, igUserId: string, media: stri
       childBody.media_type = "VIDEO";
       childBody.video_url = url;
     } else {
-      childBody.image_url = url;
+      childBody.image_url = feedImageUrl(url);
     }
 
     const childId = await createContainer(accessToken, igUserId, childBody);
@@ -215,7 +232,7 @@ export async function publishToInstagram({
       igUserId,
       isVideo(url)
         ? { media_type: "REELS", video_url: url, caption }
-        : { image_url: url, caption }
+        : { image_url: feedImageUrl(url), caption }
     );
     await waitForContainer(containerId, accessToken);
   } else {

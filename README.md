@@ -200,6 +200,8 @@ Las cuentas de Instagram Business/Creator se publican con la Instagram Graph API
 
 Después de crear el contenedor se consulta `status_code` hasta `FINISHED` (los videos tardan) y se publica con `media_publish`. Instagram **no permite publicaciones sin media**: la API rechaza el post y el formulario lo avisa antes de programar.
 
+**Relación de aspecto.** El feed de Instagram sólo acepta imágenes entre **4:5 y 1.91:1**; fuera de ese rango el contenedor falla con `The aspect ratio is not supported` (lo típico son fotos verticales de celular, 9:16, o panorámicas). Por eso el publisher no pasa la URL del archivo tal cual: para los medios que sirve esta app pide `?ig=feed` y `/api/media/<id>/<filename>` devuelve la imagen recortada al centro con `sharp` (`fitImageForInstagramFeed` en `src/lib/image-processing.ts`) antes de entregársela a Meta. El recorte es al vuelo y sólo re-codifica las imágenes que están fuera de rango, así también se publican los archivos subidos antes de este cambio sin migrar la base. Las **Historias no se recortan**: ahí 9:16 es el formato correcto.
+
 Existen dos disparadores, y puedes usar uno, otro o ambos:
 
 1. **Scheduler interno** (`src/instrumentation.ts`): arranca con el servidor en producción y ejecuta `publishDuePosts()` cada `PUBLISH_INTERVAL_SECONDS`.
@@ -218,7 +220,7 @@ Los posts que queden en `PUBLISHING` más de 10 minutos (por un reinicio a mitad
 
 En `/planning` los medios se suben como archivos, no como URLs:
 
-- **Imágenes**: JPG, PNG, WebP, HEIC/HEIF (se convierten a JPEG con `sharp`, máx. 2048 px y `quality` 90).
+- **Imágenes**: JPG, PNG, WebP, HEIC/HEIF (se convierten a JPEG con `sharp`, máx. 2048 px y `quality` 90 y se guardan con su proporción original). El recorte a 4:5–1.91:1 que exige el feed de Instagram se aplica **al servir** el archivo con `?ig=feed`, no al subirlo, para no romper las Historias.
 - **Videos**: MP4 y MOV.
 - Hasta **10 medios por publicación** y **1 por historia**; máximo **16 MB por archivo**.
 - Los archivos se guardan en la base de datos (`MediaAsset.data` como `bytea`) y se sirven desde `/api/media/<id>/<filename>`. No hace falta volumen persistente en Docker: sobreviven a redeploys y a un contenedor nuevo.
@@ -374,6 +376,7 @@ Casos reales encontrados durante el despliegue y la puesta en marcha:
 | Meta rechaza el ícono de la app | El PNG tenía canal alfa (`colorType=6`). | Exportarlo en truecolor sin alfa (`colorType=2`). El archivo bueno es `public/app-icon-1024.png`. |
 | Al importar sólo aparecen algunas Páginas de Facebook | El diálogo de Login autoriza Página por Página y/o el token es anterior a los permisos actuales. | Ver *Páginas que no aparecen al importar*. |
 | Instagram no muestra cuentas | No hay cuentas Business/Creator vinculadas a las Páginas **ya conectadas**, o falta `instagram_basic`. | Conectar primero la Página en `/connections` y reconectar Facebook para autorizar el permiso. |
+| Post de Instagram falla con `The aspect ratio is not supported` | La imagen estaba fuera del rango 4:5 – 1.91:1 (foto vertical de celular, panorámica). | Ya se corrige solo: el publisher pide `?ig=feed` y el archivo se recorta al servir. En posts que ya quedaron `FAILED` hay que reintentar desde `/planning`. Sólo persiste si el medio es una **URL externa** (no `/api/media/...`): ahí el recorte no se puede aplicar. |
 | "Se produjo un error. Actualiza la página o cierra y vuelve a abrir la ventana del navegador" al subir una imagen | Es un error genérico del SDK de Facebook dentro del modal de publicación. | Recargar y reintentar; si persiste, revisar la consola del navegador y los scopes del token. |
 | El **Inbox** no recibe nada | Falta configurar el webhook, o el token guardado es anterior a los permisos de mensajería. | Definir `META_WEBHOOK_VERIFY_TOKEN`, cargar la Callback URL y el Verify token en la app de Meta, y reconectar Facebook para autorizar `pages_messaging` / `pages_read_user_content` / `instagram_manage_*`. Mientras tanto se puede forzar con *Actualizar*. |
 | `GET /api/webhooks/meta` devuelve 500 | `META_WEBHOOK_VERIFY_TOKEN` no está definida en el entorno. | Cargarla y redeployar; el setup en `/inbox` -> *Webhooks* lo muestra como `verifyTokenConfigured: false`. |

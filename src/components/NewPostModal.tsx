@@ -340,7 +340,8 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
           )}
           {!isStory && isInstagram && (
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Publicación normal: carrusel de hasta {MAX_MEDIA_ITEMS} archivos.
+              Publicación normal: carrusel de hasta {MAX_MEDIA_ITEMS} archivos. Las fotos se recortan al
+              centro para el formato 4:5 de Instagram.
             </span>
           )}
         </div>
@@ -509,7 +510,7 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
               {isStory
                 ? 'Las Historias llevan un solo archivo. Instagram descarga el video desde esta app, por eso los archivos quedan guardados acá.'
-                : 'Instagram no permite publicaciones sólo de texto. Las imágenes se convierten a JPG y podés mezclar hasta 10 fotos y videos en un carrusel.'}
+                : 'Instagram no permite publicaciones sólo de texto. Las imágenes se convierten a JPG (las que no entran en 4:5 se recortan al centro) y podés mezclar hasta 10 fotos y videos en un carrusel.'}
             </span>
           )}
         </div>

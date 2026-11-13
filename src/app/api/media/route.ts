@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import sharp from "sharp";
 import { badRequest, requireTenant, serverError } from "@/lib/api";
+import { MAX_IMAGE_DIMENSION } from "@/lib/image-processing";
 import { prisma } from "@/lib/prisma";
 import {
   MAX_MEDIA_ITEMS,
@@ -17,9 +18,6 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** Lado máximo al que se reescalan las imágenes antes de guardarlas. */
-const MAX_IMAGE_DIMENSION = 2048;
 
 function formatMb(bytes: number) {
   return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`;
