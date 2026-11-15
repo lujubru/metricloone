@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { BarChart3, CalendarDays, Inbox, Settings, Share2, Link as LinkIcon, ShieldCheck } from 'lucide-react';
+import { BarChart3, CalendarDays, Inbox, Settings, Share2, Link as LinkIcon, ShieldCheck, Video } from 'lucide-react';
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -11,6 +11,7 @@ export default function Sidebar() {
 
   const navItems = [
     { name: 'Analytics', path: '/', icon: <BarChart3 size={20} /> },
+    { name: 'Reels', path: '/reels', icon: <Video size={20} /> },
     { name: 'Planning', path: '/planning', icon: <CalendarDays size={20} /> },
     { name: 'Inbox', path: '/inbox', icon: <Inbox size={20} /> },
     { name: 'SmartLink', path: '/smartlink', icon: <LinkIcon size={20} /> },

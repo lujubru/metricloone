@@ -28,6 +28,7 @@ export const FACEBOOK_SCOPES = [
   "pages_manage_engagement",
   "instagram_basic",
   "instagram_content_publish",
+  "instagram_manage_insights",
   "instagram_manage_comments",
   "instagram_manage_messages",
 ] as const;

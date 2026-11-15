@@ -83,6 +83,43 @@ export type InstagramPublishInput = {
   postType?: string;
 };
 
+export type InstagramReelInsights = {
+  averageWatchTimeMs: number | null;
+  skipRate: number | null;
+  views: number | null;
+};
+
+type InstagramInsight = {
+  name: string;
+  values?: { value?: unknown }[];
+};
+
+function numericInsight(insights: InstagramInsight[], name: string) {
+  const value = insights.find((insight) => insight.name === name)?.values?.[0]?.value;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Lee métricas de retención de un Reel publicado en Instagram. */
+export async function getInstagramReelInsights(
+  mediaId: string,
+  accessToken: string
+): Promise<InstagramReelInsights> {
+  const metrics = [
+    "ig_reels_avg_watch_time",
+    "reels_skip_rate",
+    "views",
+  ].join(",");
+  const response = await graphRequest<{ data: InstagramInsight[] }>(
+    `/${mediaId}/insights?metric=${metrics}&period=lifetime&access_token=${encodeURIComponent(accessToken)}`
+  );
+
+  return {
+    averageWatchTimeMs: numericInsight(response.data, "ig_reels_avg_watch_time"),
+    skipRate: numericInsight(response.data, "reels_skip_rate"),
+    views: numericInsight(response.data, "views"),
+  };
+}
+
 function isVideo(url: string) {
   return isVideoUrl(url);
 }

@@ -30,6 +30,7 @@ Flujo de uso en producción:
 | `/login` | OK | Login propio con email y contraseña (NextAuth `credentials`). |
 | `/admin` | OK | Sólo `ADMIN`: crea cuentas (tenants), carga el App ID/Secret de Facebook de cada una y gestiona sus usuarios. |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
+| `/reels` | OK | Retención de los últimos 20 Reels publicados desde la app: tiempo promedio de reproducción, porcentaje de omisión en los primeros 3 segundos y reproducciones. |
 | `/connections` | OK | Conexión OAuth con la app de Facebook **de la propia cuenta**, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. |
 | `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Permite **subir imágenes y videos** (varios por publicación) y elegir entre **Publicación** o **Historia**. Vistas **Día / Semana / Mes** reales, filtros por perfil, red, tipo y estado, navegación de período y el botón **Nuevo post** del topbar habilitado. Muestra miniaturas, el tipo, el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
 | `/settings` | OK | Datos de la sesión, cierre de sesión y desconexión de perfiles. |
@@ -94,7 +95,7 @@ En cada app de Meta hay que agregar la redirect URI de OAuth válida:
 https://<tu-dominio>/api/connect/facebook/callback
 ```
 
-Permisos solicitados: `email`, `public_profile`, `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`, `instagram_manage_messages`.
+Permisos solicitados: `email`, `public_profile`, `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_basic`, `instagram_content_publish`, `instagram_manage_insights`, `instagram_manage_comments`, `instagram_manage_messages`.
 
 Los permisos de **Inbox** (`pages_read_user_content`, `pages_messaging`, `pages_manage_engagement`, `instagram_manage_comments`, `instagram_manage_messages`) se agregaron después de la primera puesta en marcha: si conectaste las cuentas antes, hay que **volver a conectar Facebook** para que el token los incluya. La lista vive en `FACEBOOK_SCOPES` (`src/lib/facebook.ts`).
 
@@ -102,6 +103,8 @@ Los permisos de **Inbox** (`pages_read_user_content`, `pages_messaging`, `pages_
 `business_management` se pide porque sin él las Páginas que están dentro de un Business Portfolio pueden no aparecer en `/me/accounts`.
 
 Los permisos de Instagram (`instagram_basic`, `instagram_content_publish`) deben agregarse también en el panel de la app de Meta; mientras la app esté en modo *Development* solo funcionan para usuarios con rol en la app. Si ya habías iniciado sesión antes de agregarlos, hay que cerrar sesión y volver a entrar con Facebook para autorizarlos.
+
+La vista `/reels` también requiere `instagram_manage_insights`: agrégalo a los permisos de la app y reconecta Facebook para que el token guardado lo incluya. Esta vista usa el flujo de Facebook existente; configurar Unified Login por sí solo no cambia cómo se conecta la aplicación. Si la app está en *Development*, la cuenta que autoriza debe tener un rol en ella; para clientes sin rol se requiere acceso avanzado aprobado por Meta. Meta puede demorar hasta 48 horas en disponibilizar estos datos. La vista consulta el estado actual de hasta los 20 Reels más recientes publicados desde la app; no guarda un historial de snapshots.
 
 ### Páginas que no aparecen al importar
 
@@ -162,6 +165,7 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/facebook/save-pages` | POST | Guarda las Páginas seleccionadas como `SocialProfile` (revalida contra la Graph API). |
 | `/api/instagram/accounts` | GET | Lista las cuentas de Instagram Business vinculadas a las **Páginas ya conectadas** (sin exponer tokens). |
 | `/api/instagram/save-accounts` | POST | Guarda las cuentas de Instagram seleccionadas como `SocialProfile` (`instagram_business`, con `parentProfileId`). |
+| `/api/analytics/instagram/reels` | GET | Lee retención y reproducciones de los últimos 20 Reels publicados por el tenant. Requiere `instagram_manage_insights`. |
 | `/api/profiles` | GET | Perfiles conectados del tenant. |
 | `/api/profiles/[id]` | DELETE | Desconecta un perfil. |
 | `/api/posts` | GET/POST | Lista y crea publicaciones (`content`, `mediaUrls`, `postType`, `socialProfileId`, `scheduledFor`). |
