@@ -257,9 +257,9 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+      <div className="modal-header">
         <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Nuevo Post</h2>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+        <button onClick={onClose} aria-label="Cerrar" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           <X size={20} />
         </button>
       </div>
@@ -419,7 +419,8 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
           >
             <Upload size={20} style={{ color: 'var(--text-secondary)' }} />
             <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              Arrastrá los archivos acá o
+              <span className="np-drop-hint-desktop">Arrastrá los archivos acá o</span>
+              <span className="np-drop-hint-touch">Elegí los archivos desde tu galería</span>
             </span>
             <button
               type="button"
@@ -483,21 +484,7 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
                     onClick={() => removeMedia([item.id])}
                     aria-label={`Quitar ${item.filename}`}
                     title={`Quitar ${item.filename}`}
-                    style={{
-                      position: 'absolute',
-                      top: 2,
-                      right: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: 22,
-                      height: 22,
-                      borderRadius: '50%',
-                      border: 'none',
-                      backgroundColor: 'rgba(15, 23, 42, 0.85)',
-                      color: '#f8fafc',
-                      cursor: 'pointer',
-                    }}
+                    className="np-media-remove"
                   >
                     <Trash2 size={12} />
                   </button>
@@ -517,7 +504,7 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
         {error && <div style={{ color: '#ef4444', fontSize: '0.875rem' }}>{error}</div>}
 
-        <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+        <div className="modal-actions">
           <button type="button" onClick={onClose} className="btn btn-secondary" style={{ flex: 1 }}>Cancelar</button>
           <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={saving || loadingProfiles || !socialProfileId}>
             {saving ? 'Guardando...' : 'Programar Post'}
@@ -546,36 +533,10 @@ export default function NewPostModal({ open, onClose, onCreated }: NewPostModalP
       role="dialog"
       aria-modal="true"
       aria-label="Nuevo Post"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        zIndex: 100,
-        display: 'flex',
-        overflowY: 'auto',
-        overscrollBehavior: 'contain',
-        padding: '1.5rem 1rem',
-        backdropFilter: 'blur(4px)',
-      }}
+      className="modal-overlay"
       onClick={onClose}
     >
-      <div
-        style={{
-          // `margin: auto` centra cuando hay espacio y permite scrollear cuando el
-          // formulario es mas alto que el viewport (a diferencia de align-items: center).
-          margin: 'auto',
-          backgroundColor: 'var(--card-bg)',
-          width: '100%',
-          maxWidth: '520px',
-          borderRadius: 'var(--radius-lg)',
-          padding: '2rem',
-          boxShadow: 'var(--shadow-lg)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
         <NewPostForm onClose={onClose} onCreated={onCreated} />
       </div>
     </div>,

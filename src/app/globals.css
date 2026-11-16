@@ -27,6 +27,7 @@ body {
   color: var(--text-primary);
   line-height: 1.5;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
 }
 
@@ -34,6 +35,7 @@ body {
   display: flex;
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -142,9 +144,6 @@ body {
 
 @media (max-width: 768px) {
   .grid-cols-2, .grid-cols-3, .grid-cols-4 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
-  .sidebar { width: 80px; }
-  .sidebar-header span, .nav-item span { display: none; }
-  .nav-item { justify-content: center; padding: 1rem; }
 }
 
 .btn {
@@ -231,4 +230,211 @@ body {
 .social-btn:hover {
   background-color: var(--card-hover);
   transform: scale(1.02);
+}
+
+/* ---------- Modal (NewPostModal) ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.5rem 1rem;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+}
+
+.modal-panel {
+  /* `margin: auto` centra cuando hay espacio y permite scrollear cuando el
+     formulario es más alto que el viewport. */
+  margin: auto;
+  width: 100%;
+  max-width: 520px;
+  padding: 2rem;
+  background-color: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.np-drop-hint-touch { display: none; }
+
+.np-media-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: rgba(15, 23, 42, 0.85);
+  color: #f8fafc;
+  cursor: pointer;
+}
+
+.inbox-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+  min-height: 520px;
+}
+
+.inbox-list { border-right: 1px solid var(--border-color); }
+
+/* ---------- Mobile / touch ---------- */
+
+@media (hover: none) {
+  .card:hover { transform: none; box-shadow: var(--shadow-md); }
+  .social-btn:hover { transform: none; }
+}
+
+@media (max-width: 768px) {
+  /* Sin esto iOS agranda la página al enfocar un campo con fuente < 16px. */
+  input, select, textarea { font-size: 16px; }
+
+  .btn { min-height: 42px; }
+
+  .app-container { flex-direction: column; }
+
+  /* Sidebar -> barra inferior de navegación. */
+  .sidebar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    width: 100%;
+    border-right: none;
+    border-top: 1px solid var(--border-color);
+    padding-bottom: env(safe-area-inset-bottom);
+    background-color: rgba(30, 41, 59, 0.98);
+    backdrop-filter: blur(8px);
+  }
+
+  .sidebar-header { display: none; }
+
+  .nav-menu {
+    flex-direction: row;
+    gap: 0.25rem;
+    padding: 0.35rem 0.4rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .nav-menu::-webkit-scrollbar { display: none; }
+
+  .nav-item {
+    flex: 1 0 auto;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 62px;
+    padding: 0.4rem 0.35rem;
+    font-size: 0.68rem;
+    text-align: center;
+  }
+
+  .nav-item span { display: block; }
+
+  .nav-item.active { border-left: none; }
+
+  /* Deja aire para la barra inferior y para el FAB de "New Post". */
+  .main-content { padding-bottom: calc(132px + env(safe-area-inset-bottom)); }
+
+  /* Topbar compacta y el botón de crear post pasa a ser un FAB. */
+  .topbar {
+    height: 56px;
+    padding: 0 0.75rem;
+    /* `backdrop-filter` convierte al topbar en containing block de `position: fixed`,
+       asi que se desactiva para que el FAB se ubique contra el viewport. */
+    backdrop-filter: none;
+    background-color: var(--sidebar-bg);
+  }
+
+  .topbar-search,
+  .topbar-bell,
+  .topbar-user-text { display: none; }
+
+  .topbar-new-post {
+    position: fixed;
+    right: 1rem;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    z-index: 70;
+    padding: 0.7rem 1.1rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  .page-content { padding: 1rem; max-width: none; }
+
+  .page-title { font-size: 1.5rem; margin-bottom: 1rem; }
+
+  .page-subtitle { margin-top: 0; margin-bottom: 1.25rem; }
+
+  .card { padding: 1rem; border-radius: var(--radius-md); }
+
+  /* El formulario del post ocupa toda la pantalla. */
+  .modal-overlay { padding: 0; }
+
+  .modal-panel {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    max-width: none;
+    min-height: 100dvh;
+    border-radius: 0;
+    padding: 1rem 1rem 0;
+  }
+
+  /* El form crece para que la barra de acciones quede pegada abajo. */
+  .modal-panel > form { flex: 1; }
+
+  .modal-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: auto -1rem 0;
+    padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border-color);
+    background-color: var(--card-bg);
+  }
+
+  .np-drop-hint-desktop { display: none; }
+
+  .np-drop-hint-touch { display: inline; }
+
+  .np-media-remove { width: 32px; height: 32px; }
+
+  /* Calendario: 7 columnas no entran, se scrollean en horizontal. */
+  .calendar-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  .calendar-scroll > * { min-width: 640px; }
+
+  /* Inbox: lista arriba, conversación abajo. */
+  .inbox-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+
+  .inbox-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .inbox-list .inbox-threads { max-height: 40vh; }
+
+  /* Sin conversación elegida no mostramos el placeholder para no empujar la lista. */
+  .inbox-thread-empty { display: none; }
 }

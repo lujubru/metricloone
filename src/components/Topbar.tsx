@@ -11,7 +11,7 @@ export default function Topbar() {
   return (
     <header className="topbar">
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1 }}>
-        <div style={{ position: 'relative', width: '100%', maxWidth: '300px' }}>
+        <div className="topbar-search" style={{ position: 'relative', width: '100%', maxWidth: '300px' }}>
           <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
           <input
             type="text"
@@ -29,15 +29,15 @@ export default function Topbar() {
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-        <button className="btn btn-primary" style={{ borderRadius: '2rem' }} onClick={() => setIsNewPostOpen(true)}>
+        <button className="btn btn-primary topbar-new-post" style={{ borderRadius: '2rem' }} onClick={() => setIsNewPostOpen(true)}>
           + New Post
         </button>
-        <Bell size={20} style={{ color: 'var(--text-secondary)', cursor: 'pointer' }} />
+        <Bell className="topbar-bell" size={20} style={{ color: 'var(--text-secondary)', cursor: 'pointer' }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: 'var(--card-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <User size={20} />
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+          <div className="topbar-user-text" style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
             <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>
               {session?.user?.name || session?.user?.email || 'Usuario'}
             </span>

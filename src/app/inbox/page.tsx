@@ -307,17 +307,14 @@ export default function InboxPage() {
       {showSetup && <SetupPanel setup={setup} loading={setupLoading} />}
 
       <div
-        className="card"
+        className="card inbox-layout"
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 340px) minmax(0, 1fr)',
           gap: 0,
           overflow: 'hidden',
-          minHeight: '520px',
           padding: 0,
         }}
       >
-        <div style={{ borderRight: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div className="inbox-list" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
           <div
             style={{
               padding: '0.75rem',
@@ -368,7 +365,7 @@ export default function InboxPage() {
             </label>
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', maxHeight: '620px' }}>
+          <div className="inbox-threads" style={{ flex: 1, overflowY: 'auto', maxHeight: '620px' }}>
             {loading ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 <Loader2 size={20} style={SPIN} /> Cargando…
@@ -481,9 +478,10 @@ export default function InboxPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div className="inbox-thread" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
           {!selectedId ? (
             <div
+              className="inbox-thread-empty"
               style={{
                 flex: 1,
                 display: 'flex',

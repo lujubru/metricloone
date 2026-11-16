@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import {
   AlertCircle,
   ChevronLeft,
@@ -37,6 +37,18 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 type ViewMode = 'month' | 'week' | 'day';
+
+const NARROW_SCREEN_QUERY = '(max-width: 768px)';
+
+function subscribeToNarrowScreen(onChange: () => void) {
+  const query = window.matchMedia(NARROW_SCREEN_QUERY);
+  query.addEventListener('change', onChange);
+  return () => query.removeEventListener('change', onChange);
+}
+
+function getNarrowScreenSnapshot() {
+  return window.matchMedia(NARROW_SCREEN_QUERY).matches;
+}
 
 type Filters = {
   profileId: string;
@@ -149,7 +161,11 @@ export default function Planning() {
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [view, setView] = useState<ViewMode>('month');
+  const isNarrowScreen = useSyncExternalStore(subscribeToNarrowScreen, getNarrowScreenSnapshot, () => false);
+  const [viewPreference, setViewPreference] = useState<ViewMode | null>(null);
+  // En celular el mes de 7 columnas no se lee: arrancamos en la agenda del día.
+  const view: ViewMode = viewPreference ?? (isNarrowScreen ? 'day' : 'month');
+  const setView = setViewPreference;
   const [cursor, setCursor] = useState<Date>(() => startOfDay(new Date()));
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -430,37 +446,41 @@ export default function Planning() {
             <Loader2 size={18} style={{ animation: 'spin 2s linear infinite' }} /> Cargando posts...
           </div>
         ) : view === 'month' ? (
-          <MonthGrid
-            cursor={cursor}
-            today={today}
-            postsByDay={postsByDay}
-            onSelectDay={goToDay}
-          />
+          <div className="calendar-scroll">
+            <MonthGrid
+              cursor={cursor}
+              today={today}
+              postsByDay={postsByDay}
+              onSelectDay={goToDay}
+            />
+          </div>
         ) : view === 'week' ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', backgroundColor: 'var(--border-color)', gap: '1px' }}>
-            {Array.from({ length: 7 }).map((_, index) => {
-              const date = addDays(startOfWeek(cursor), index);
-              const dayPosts = postsByDay.get(dateKey(date)) || [];
+          <div className="calendar-scroll">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', backgroundColor: 'var(--border-color)', gap: '1px' }}>
+              {Array.from({ length: 7 }).map((_, index) => {
+                const date = addDays(startOfWeek(cursor), index);
+                const dayPosts = postsByDay.get(dateKey(date)) || [];
 
-              return (
-                <div key={dateKey(date)} style={{ backgroundColor: 'var(--card-bg)' }}>
-                  <div style={dayHeaderStyle}>
-                    <span style={{ fontWeight: 500 }}>{WEEKDAYS[index]}</span>
-                    <span style={{
-                      fontWeight: isSameDay(date, today) ? 700 : 500,
-                      color: isSameDay(date, today) ? 'var(--primary-color)' : 'var(--text-primary)',
-                    }}>
-                      {date.getDate()}
-                    </span>
+                return (
+                  <div key={dateKey(date)} style={{ backgroundColor: 'var(--card-bg)' }}>
+                    <div style={dayHeaderStyle}>
+                      <span style={{ fontWeight: 500 }}>{WEEKDAYS[index]}</span>
+                      <span style={{
+                        fontWeight: isSameDay(date, today) ? 700 : 500,
+                        color: isSameDay(date, today) ? 'var(--primary-color)' : 'var(--text-primary)',
+                      }}>
+                        {date.getDate()}
+                      </span>
+                    </div>
+                    <div style={{ padding: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', minHeight: '160px' }}>
+                      {dayPosts.map((p) => (
+                        <PostChip key={p.id} post={p} showTime />
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ padding: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', minHeight: '160px' }}>
-                    {dayPosts.map((p) => (
-                      <PostChip key={p.id} post={p} showTime />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         ) : (
           <div>

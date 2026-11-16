@@ -14,6 +14,8 @@ Clon funcional (MVP) de Metricool: panel para conectar perfiles sociales, planif
 | Instagram | publica imágenes, carruseles (2 a 10) y Reels/Historias. Desde `94ebc54` los medios se recortan a 4:5 – 1.91:1 al servirse (`?ig=feed`), funcionando en producción con fotos verticales de celular. |
 | CDN | **Cloudflare** delante de Coolify. Cachea `/api/media/...`, así que después de un deploy puede seguir sirviendo una respuesta vieja (purgar la URL al cambiar el recorte). |
 
+**Validado en producción el 15/11/2026** sobre el commit `f7b9da3` más los cambios de permisos y móvil: login del ADMIN, alta de un usuario eligiendo redes del pool, login del cliente con el menú reducido (sin SmartLink, Connections, Settings ni Admin), `403` en los endpoints de redes desde una sesión `CLIENT` y calendario/modal probados en 390×844.
+
 Flujo de uso en producción:
 
 1. El **ADMIN** configura **una sola app de Meta** (la suya) en las variables de entorno `FB_APP_ID` / `FB_APP_SECRET` y agrega la redirect URI `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
@@ -50,6 +52,21 @@ Las pantallas que tocan la configuración de la cuenta o de las redes (SmartLink
 - **Menú**: `src/components/Sidebar.tsx` arma los ítems base (Analytics, Reels, Planning, Inbox) y concatena los de administración sólo si `session.user.role === "ADMIN"`.
 - **URL directa**: `src/proxy.ts` define `ADMIN_ONLY_PATHS = ["/admin", "/smartlink", "/connections", "/settings"]`; con sesión válida y rol distinto de `ADMIN` redirige a `/` (el guard de sesión previo se mantiene: sin token va a `/login?callbackUrl=...`).
 - **API**: `/api/admin/*` y los endpoints que crean o modifican conexiones (`/api/facebook/pages`, `/api/facebook/save-pages`, `/api/instagram/accounts`, `/api/instagram/save-accounts`) usan `requireAdmin()` y responden `403`; `/api/connect/facebook/start` redirige a `/` porque es una navegación del navegador.
+
+## Experiencia móvil (iOS y Android)
+
+Los clientes programan desde el celular, así que por debajo de `768px` la app cambia de forma. Todo vive en `src/app/globals.css` (bloque `@media (max-width: 768px)`) y `src/app/layout.tsx` (viewport); los componentes sólo llevan clases, porque **los estilos inline ganan a las media queries**.
+
+| Cambio | Detalle |
+| --- | --- |
+| Viewport | `viewportFit: 'cover'` + `themeColor`, así el contenido llega al borde y se respeta el notch. `body` y `.app-container` usan `100dvh` (la barra del navegador móvil no genera scroll fantasma). |
+| Navegación | El sidebar se convierte en **barra inferior de tabs** (`position: fixed`, `env(safe-area-inset-bottom)`) con los ítems en fila y scroll horizontal. El header del logo se oculta. |
+| Crear publicación | El botón del topbar pasa a **FAB** fijo sobre la barra inferior; buscador, campana y datos del usuario se ocultan. `.main-content` reserva 132px abajo para que nada quede tapado. |
+| Modal de nuevo post | A pantalla completa (`min-height: 100dvh`, sin radio) con la fila *Cancelar / Programar* sticky al pie y `env(safe-area-inset-bottom)`. El texto del dropzone cambia a "Elegí los archivos desde tu galería" y el botón de borrar miniatura crece de 22px a 32px. |
+| Planning | Arranca en vista **Día** (detectado con `useSyncExternalStore` sobre `matchMedia`); Mes y Semana se envuelven en `.calendar-scroll` (scroll horizontal con `min-width: 640px`) para que las 7 columnas no se aplasten. |
+| Inbox | Pasa a una columna: lista arriba (con `max-height: 40vh`) y conversación abajo; el separador vertical se vuelve horizontal y el placeholder "Elegí una conversación" se oculta. |
+| Formularios | `input`, `select` y `textarea` a `16px` para que iOS no haga zoom al enfocar, y `.btn` con `min-height: 42px` como objetivo táctil. |
+| Táctil | `@media (hover: none)` anula los `transform` de hover en tarjetas y botones sociales, que en pantallas táctiles quedan "pegados". |
 
 ## Stack
 

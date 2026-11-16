@@ -333,3 +333,65 @@ npm run build      # OK
 
 - ⚠️ El `proxy` decide por el `role` del JWT, que se fija al iniciar sesión: si se cambia el rol de un usuario, hay que volver a loguearse para que el redirect aplique (la API, en cambio, lo lee de la base en cada request).
 - ⚠️ Ocultar pantallas no reemplaza al `requireAdmin()`: cualquier endpoint nuevo para estas secciones tiene que usarlo explícitamente.
+
+### 13.6 Validado en producción (15/11/2026)
+
+Con el pool de redes y las restricciones de rol ya desplegados en <https://metricool.pixeldesarrollo.com> se verificó el circuito completo:
+
+- Login del ADMIN y conexión de Páginas de Facebook / cuentas de Instagram al pool.
+- Alta de un usuario nuevo eligiendo redes ya vinculadas, y ajuste posterior de sus accesos.
+- Login del cliente: el menú queda en Analytics, Reels, Planning e Inbox.
+- Entrada manual a `/smartlink`, `/connections`, `/settings` y `/admin` con sesión `CLIENT` → redirige a `/`.
+- `GET /api/facebook/pages`, `/api/instagram/accounts` y `/api/connect/facebook/start` con sesión `CLIENT` → `403` / redirect, sin filtrar datos.
+- Publicación programada por el cliente sobre una red asignada: se publica con los tokens del ADMIN, o sea que Meta sigue viendo la misma cuenta y el webhook es el mismo para todos.
+
+## 14. Optimización móvil (iOS y Android)
+
+### 14.1 Pedido
+
+> "habría que ver de optimizarlo para dispositivos móviles también iOS como android porque los clientes mayormente van a subir contenido desde sus celulares"
+
+### 14.2 Regla de trabajo
+
+Los estilos inline ganan a las media queries, así que cualquier propiedad que tenga que cambiar en el celular se movió a una clase en `globals.css`. Los componentes quedaron con clases (sin duplicar valores) y los media queries concentran los cambios.
+
+### 14.3 Cambios por archivo
+
+| Archivo | Cambio |
+| --- | --- |
+| `src/app/layout.tsx` | `export const viewport` con `width: device-width`, `initialScale: 1`, `viewportFit: 'cover'` y `themeColor: '#0f172a'`. |
+| `src/app/globals.css` | `100dvh` en `body` y `.app-container`; clases nuevas `.modal-overlay`, `.modal-panel`, `.modal-header`, `.modal-actions`, `.np-media-remove`, `.np-drop-hint-desktop/-touch`, `.inbox-list`, `.inbox-thread-empty` y `.calendar-scroll`; `@media (hover: none)` y un bloque `@media (max-width: 768px)` completo. Tambien `.inbox-layout` (grid de dos columnas) y el panel del modal como columna flex con `.modal-panel > form { flex: 1 }` para que `.modal-actions` quede pegado al pie. |
+| `src/components/Topbar.tsx` | Clases `.topbar-search`, `.topbar-bell`, `.topbar-user-text` y `.topbar-new-post`. |
+| `src/components/NewPostModal.tsx` | Overlay y panel por clase (se sacó el bloque inline), header `.modal-header`, acciones `.modal-actions`, botón de borrar `.np-media-remove`, texto del dropzone dividido en desktop/touch. |
+| `src/app/planning/page.tsx` | Vista inicial **Día** en pantallas angostas vía `useSyncExternalStore` sobre `matchMedia('(max-width: 768px)')` (`viewPreference` nulo = automático; al elegir una vista se respeta la elección y no vuelve a saltar). Mes y Semana envueltos en `.calendar-scroll`. |
+| `src/app/inbox/page.tsx` | `card inbox-layout`, `inbox-list` (se quitó el `borderRight` inline), `inbox-threads`, `inbox-thread` e `inbox-thread-empty`; las columnas del grid salieron del `style` inline y viven en `.inbox-layout` de `globals.css` (si no, el media query no puede pasarlas a una sola columna). |
+
+### 14.4 Comportamiento en celular
+
+- **Navegación**: barra inferior fija de tabs con scroll horizontal, respetando `env(safe-area-inset-bottom)`; se oculta el header del logo.
+- **Topbar**: 56px; se ocultan buscador, campana y datos del usuario. "+ New Post" pasa a FAB fijo sobre la barra y `.main-content` reserva 132px abajo para que no tape contenido.
+- **Modal**: pantalla completa con acciones sticky al pie; el dropzone invita a elegir de la galería y el botón de borrar miniatura mide 32px.
+- **Planning**: abre en agenda del día; Mes y Semana se deslizan en horizontal (`min-width: 640px`).
+- **Inbox**: lista arriba (40vh) y conversación abajo.
+- **Formularios**: `font-size: 16px` en campos para evitar el zoom automático de iOS y `.btn` con `min-height: 42px` como objetivo táctil.
+
+### 14.5 Validación ejecutada
+
+```bash
+npx tsc --noEmit   # OK
+npm run lint       # OK (queda el warning preexistente de layout.tsx)
+npm run build      # OK
+```
+
+Ademas se verifico el layout en un navegador real con viewports de 320, 360, 390, 414, 768 y 769px midiendo posiciones y estilos computados:
+
+- la barra inferior queda fija abajo (64px) y el FAB 12px por encima;
+- `.main-content` reserva `132px` de padding inferior en movil y `0` desde 769px;
+- el modal ocupa toda la pantalla con `.modal-actions` siempre visible al pie, tanto con contenido corto como largo (scroll en `.modal-overlay`);
+- el calendario scrollea (640px de contenido vs. 357px visibles) sin generar scroll horizontal en la pagina (`document.scrollWidth === innerWidth`);
+- los campos computan `font-size: 16px` en movil y el hint tactil reemplaza al de drag & drop.
+
+### 14.6 Pendientes sugeridos
+
+- Probar en un iPhone y un Android reales (Safari iOS y Chrome Android) la subida de fotos/videos desde la galería y el gesto de scroll del calendario.
+- Evaluar un PWA manifest + `apple-mobile-web-app-capable` para poder agregarla a la pantalla de inicio.

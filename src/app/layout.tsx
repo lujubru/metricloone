@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import AppShell from '@/components/AppShell';
 import { Providers } from './Providers';
@@ -6,6 +6,15 @@ import { Providers } from './Providers';
 export const metadata: Metadata = {
   title: 'Metricool Clone | Analytics & Planning',
   description: 'Manage your social media from one place',
+};
+
+// `viewportFit: 'cover'` habilita los `env(safe-area-inset-*)` que usa el CSS
+// para no quedar debajo del notch ni de la barra gestual en iOS/Android.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#0f172a',
 };
 
 export default function RootLayout({
