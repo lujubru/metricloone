@@ -81,7 +81,7 @@ export async function POST(req: Request) {
       ? body.socialProfileIds.filter((item: unknown): item is string => typeof item === "string")
       : null;
     const grants = socialProfileIds
-      ? await syncProfileAccess({ userId: user.id, tenantId, socialProfileIds })
+      ? await syncProfileAccess({ userId: user.id, ownerTenantId: auth.tenantId, socialProfileIds })
       : 0;
 
     return NextResponse.json({ success: true, user, grants }, { status: 201 });

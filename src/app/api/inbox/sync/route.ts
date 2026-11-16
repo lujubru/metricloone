@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { accessibleProfileIds, requireTenant, serverError } from "@/lib/api";
-import { syncTenantInbox } from "@/lib/inbox";
+import { syncProfilesInbox } from "@/lib/inbox";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -12,7 +12,6 @@ export const maxDuration = 60;
 export async function POST() {
   const auth = await requireTenant();
   if ("response" in auth) return auth.response;
-  const { tenantId } = auth;
 
   try {
     const profileIds = await accessibleProfileIds(auth);
@@ -23,7 +22,7 @@ export async function POST() {
       );
     }
 
-    const summary = await syncTenantInbox(tenantId, profileIds);
+    const summary = await syncProfilesInbox(profileIds);
     return NextResponse.json(summary);
   } catch (error) {
     console.error("Error al sincronizar el inbox:", error);

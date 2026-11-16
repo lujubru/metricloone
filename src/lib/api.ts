@@ -77,15 +77,20 @@ export async function requireAdmin(): Promise<TenantAuth | { response: NextRespo
 }
 
 /**
- * Filtro de perfiles sociales que el usuario puede administrar: el ADMIN ve
- * todas las redes de su cuenta y el CLIENT sólo las que tiene asignadas.
+ * Filtro de perfiles sociales que el usuario puede administrar. Las redes se
+ * vinculan una sola vez con la cuenta de Facebook del administrador (el "pool")
+ * y los clientes sólo reciben permisos sobre ellas, así que el CLIENT ve las
+ * que tiene asignadas —sin importar de qué cuenta sean— más las de su propia
+ * cuenta por si alguna vez conecta las suyas.
  */
 export function accessibleProfileWhere(auth: TenantAuth): Prisma.SocialProfileWhereInput {
   if (auth.user.role === ADMIN_ROLE) return { tenantId: auth.tenantId };
 
   return {
-    tenantId: auth.tenantId,
-    access: { some: { userId: auth.user.id } },
+    OR: [
+      { tenantId: auth.tenantId },
+      { access: { some: { userId: auth.user.id } } },
+    ],
   };
 }
 

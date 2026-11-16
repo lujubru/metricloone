@@ -209,7 +209,7 @@ Prueba funcional: subida de imágenes y videos, carrusel y publicación de Histo
 | Credenciales de Meta | **Globales**, por variables de entorno (`FB_APP_ID` / `FB_APP_SECRET`) | El ADMIN usa una sola app de Meta para todos los clientes; no hay que cargar claves por cuenta. |
 | Asignación | **Múltiple**: una red puede estar asignada a varios usuarios | Un cliente puede tener varios operadores sobre la misma Página. |
 | App propia del cliente | **Se mantiene** como opción avanzada en la tarjeta de la cuenta | No rompe a quien ya cargó sus credenciales ni bloquea ese flujo. |
-| Dónde viven los perfiles | Se **importan al tenant del cliente** con el token del ADMIN | Conserva intacto todo el andamiaje de `tenantId`; sólo se agrega el filtrado por accesos. |
+| Dónde viven los perfiles | **Una sola vez, en el tenant del ADMIN** (modelo "pool") | Los usuarios arrastran los permisos de la cuenta principal: Meta ve siempre a la misma dueña y el webhook es el mismo. Importar perfiles al cliente sólo duplicaba filas y ambigüedad. |
 | Control de acceso | Tabla join `SocialProfileAccess` (`userId` × `socialProfileId`) | Es la única forma de que varios usuarios compartan perfiles sin duplicarlos. |
 
 ### 12.3 Modelo de datos
@@ -231,30 +231,36 @@ model SocialProfileAccess {
 
 Migración `prisma/migrations/20261120120000_social_profile_access/migration.sql`: crea la tabla y hace un backfill conservador (todos los usuarios × todos los perfiles de su tenant, `ON CONFLICT DO NOTHING`), así nadie pierde acceso al actualizar. **Ya aplicada** en la base de Railway con `prisma migrate deploy`.
 
+Como los perfiles nunca llegaron a importarse a tenants de clientes, el cambio al modelo pool **no requería migración de datos**: las filas existentes son justamente los accesos de los usuarios ADMIN sobre el pool de "Cuenta principal".
+
 ### 12.4 Flujo del ADMIN
 
 1. `/admin` -> **Conectar mi Facebook** (`/api/connect/facebook/start?next=/admin`). El token de usuario queda en `FbConnection` del tenant del ADMIN.
-2. `GET /api/admin/networks` descubre sus Páginas e Instagram y los muestra agrupados (Instagram bajo su Página, con seguidores).
-3. **Crear cuenta**: nombre, email, contraseña y selección de redes. `POST /api/admin/tenants` crea el tenant + usuario, importa los perfiles elegidos con el token del ADMIN y otorga el acceso al usuario creado.
-4. **Vincular redes / Sumar redes** en una cuenta existente: `POST /api/admin/networks { tenantId, pageIds, instagramIds }` importa y otorga acceso (a todos los usuarios del tenant, o a los `userIds` indicados).
-5. **Asignar redes** por usuario: `PATCH /api/admin/users/[id] { socialProfileIds }` reemplaza los accesos de ese usuario (sólo acepta perfiles de su tenant).
+2. `GET /api/admin/networks` descubre sus Páginas e Instagram y los muestra agrupados (Instagram bajo su Página, con seguidores). Es el **pool**: la lista completa de redes disponibles para asignar.
+3. **Crear cuenta**: nombre, email, contraseña y selección de redes del pool. `POST /api/admin/tenants` crea el tenant + usuario y guarda los permisos del usuario creado sobre esos perfiles (`socialProfileIds`). No se copia ningún perfil ni token.
+4. **Agregar redes nuevas al pool**: se hace una sola vez desde `/connections` con la cuenta del ADMIN (`save-pages` / `save-accounts` hacen el `upsert` del `SocialProfile` y suscriben los webhooks). Ya no hay importación por cuenta.
+5. **Asignar redes** por usuario: `PATCH /api/admin/users/[id] { socialProfileIds }` reemplaza los accesos de ese usuario (sólo acepta perfiles del pool del ADMIN).
 6. **Credenciales propias** (opcional): si el cliente usa su propia app de Meta, se cargan desde la tarjeta y tienen prioridad sobre las globales (`resolveAppCredentials`).
 
-### 12.5 Importación y accesos
+### 12.5 Pool y accesos
 
 `src/lib/networks.ts`:
 
-- `importNetworks({ tenantId, userId, userAccessToken, pageIds, instagramIds })` -> `{ profiles, skipped, warnings }`. Revalida contra Graph API, hace `upsert` de `SocialProfile` por `[tenantId, platform, profileId]`, suscribe webhooks y crea el `FbConnection` del tenant si no existe.
 - `grantProfileAccess(socialProfileIds, userIds)` -> cantidad de accesos creados.
-- `syncProfileAccess({ userId, tenantId, socialProfileIds })` -> reemplaza los accesos del usuario, descartando ids de otro tenant.
+- `syncProfileAccess({ userId, ownerTenantId, socialProfileIds })` -> reemplaza los accesos del usuario, descartando ids que no pertenezcan al tenant del ADMIN.
+
+`POST /api/admin/networks` y `importNetworks` se eliminaron: los perfiles se crean únicamente en `/connections`, sobre la cuenta del ADMIN.
 
 ### 12.6 Filtrado de lectura
 
-`src/lib/api.ts` expone `accessibleProfileWhere(auth)` (para relaciones to-one: `socialProfile: { is: ... }`) y `accessibleProfileIds(auth)` (para listas y `count`). Se aplican en:
+`src/lib/api.ts` expone `accessibleProfileWhere(auth)` (para relaciones to-one: `socialProfile: { is: ... }`) y `accessibleProfileIds(auth)` (para listas y `count`):
 
-`/api/profiles`, `/api/profiles/[id]`, `/api/posts`, `/api/posts/[id]`, `/api/inbox`, `/api/inbox/[id]`, `/api/inbox/sync` (`syncTenantInbox(tenantId, profileIds?)`), `/api/analytics/instagram/reels`, `/api/instagram/accounts`, `/api/facebook/save-pages` y `/api/instagram/save-accounts`.
+- **ADMIN** -> `{ tenantId }`: ve todo el pool.
+- **CLIENT** -> `{ OR: [{ tenantId }, { access: { some: { userId } } }] }`: ve lo propio y lo que le fue asignado.
 
-Un usuario con sesión válida ya no puede leer ni publicar en redes que no le fueron asignadas, aunque conozca el `id`.
+Se aplican en: `/api/profiles`, `/api/profiles/[id]`, `/api/posts`, `/api/posts/[id]`, `/api/inbox`, `/api/inbox/[id]`, `/api/inbox/sync` (`syncProfilesInbox(profileIds)`), `/api/inbox/[id]/reply` (`sendInboxReply({ threadId, profileIds, body })`), `/api/analytics/instagram/reels`, `/api/instagram/accounts`, `/api/facebook/save-pages` y `/api/instagram/save-accounts`.
+
+Los `Post` se validan por su propio `tenantId`, así que un post del cliente puede publicarse contra un perfil del pool. Un usuario con sesión válida no puede leer ni publicar en redes que no le fueron asignadas, aunque conozca el `id`.
 
 ### 12.7 Variables de entorno
 
@@ -267,11 +273,11 @@ FB_APP_SECRET="<app secret>"
 
 ### 12.8 Archivos
 
-- Nuevos: `src/lib/networks.ts`, `src/app/api/admin/networks/route.ts`, la migración de `SocialProfileAccess`.
+- Nuevos: `src/lib/networks.ts` (`grantProfileAccess`, `syncProfileAccess`), `src/app/api/admin/networks/route.ts` (sólo `GET`: el pool), la migración de `SocialProfileAccess`.
 - `src/lib/facebook-oauth.ts`: `platformAppCredentials`, `hasPlatformAppCredentials`, `resolveAppCredentials`, `normalizeReturnPath`, `OAUTH_RETURN_PATHS` (`/connections`, `/admin`).
 - `/api/connect/facebook/start`: resuelve credenciales por cuenta o plataforma, valida `next` y responde `?error=credentials` si no hay ninguna.
 - `/api/webhooks/meta`: valida la firma con el secret del tenant o con el de la plataforma.
-- `/admin`: card *Mis redes de Meta*, picker de redes al crear la cuenta, *Vincular redes* por cuenta y *Asignar redes* por usuario.
+- `/admin`: card *Redes vinculadas* (pool + contador + agregar/reconectar), picker de redes del pool al crear la cuenta y *Asignar redes* por usuario.
 - `/connections`: los mensajes de error y el banner reflejan que el ADMIN es quien vincula las redes.
 
 ### 12.9 Validación ejecutada
@@ -281,9 +287,11 @@ npx prisma migrate deploy   # OK (Railway)
 npx prisma generate        # OK
 npx tsc --noEmit           # OK
 npm run lint               # OK (queda el warning preexistente de layout.tsx)
+npm run build              # OK
 ```
 
 ### 12.10 Riesgos y pendientes
 
-- ⚠️ Si la **misma Página** se importa a dos tenants, el `findFirst({ platform, profileId })` del webhook resuelve al primero: los eventos se ingestan en un solo tenant. Importar una red a un único tenant salvo necesidad explícita.
-- ⏳ Verificación funcional end-to-end (conectar desde `/admin`, importar a un cliente y comprobar que sólo ve esas redes en `/connections`, `/planning`, `/posts` e `/inbox`) queda a cargo del usuario con cuentas reales de Meta.
+- ⚠️ Dos cuentas que compartan la **misma Página** compartirían el inbox de esa red, porque el perfil es único. Con este modelo no ocurre: cada cliente tiene sus propias Páginas dentro del pool.
+- ⚠️ El token es siempre el del ADMIN: si vence o se revoca, todas las cuentas dejan de publicar. Se renueva desde *Reconectar* en `/admin` o `/connections`.
+- ⏳ Verificación funcional end-to-end (conectar desde `/admin`, crear un cliente, comprobar que sólo ve las redes asignadas en `/connections`, `/planning`, `/posts` e `/inbox`, y publicar) queda a cargo del usuario con cuentas reales de Meta.

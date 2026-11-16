@@ -68,7 +68,7 @@ export async function PATCH(req: Request, { params }: Params) {
     const grants = Array.isArray(body?.socialProfileIds)
       ? await syncProfileAccess({
           userId: id,
-          tenantId: user.tenantId ?? auth.tenantId,
+          ownerTenantId: auth.tenantId,
           socialProfileIds: body.socialProfileIds.filter(
             (item: unknown): item is string => typeof item === "string",
           ),

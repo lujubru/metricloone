@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { badRequest, requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileIds, badRequest, requireTenant, serverError } from "@/lib/api";
 import { FacebookApiError } from "@/lib/facebook";
 import { DIRECTION_OUTBOUND, sendInboxReply } from "@/lib/inbox";
 import { prisma } from "@/lib/prisma";
@@ -12,7 +12,6 @@ type Context = { params: Promise<{ id: string }> };
 export async function POST(req: Request, context: Context) {
   const auth = await requireTenant();
   if ("response" in auth) return auth.response;
-  const { tenantId } = auth;
   const { id } = await context.params;
 
   let body = "";
@@ -26,7 +25,8 @@ export async function POST(req: Request, context: Context) {
   if (!body) return badRequest("Escribí el texto de la respuesta");
 
   try {
-    const { externalId } = await sendInboxReply({ threadId: id, tenantId, body });
+    const profileIds = await accessibleProfileIds(auth);
+    const { externalId } = await sendInboxReply({ threadId: id, profileIds, body });
     const remoteCreatedAt = new Date();
 
     await prisma.$transaction([

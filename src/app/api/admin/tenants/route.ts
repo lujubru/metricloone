@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { badRequest, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { encryptSecret } from "@/lib/crypto";
-import { grantProfileAccess, importNetworks } from "@/lib/networks";
+import { syncProfileAccess } from "@/lib/networks";
 
 export const dynamic = "force-dynamic";
 
@@ -38,51 +38,35 @@ async function uniqueSlug(base: string): Promise<string> {
   return slug;
 }
 
-/** Lista de cuentas con sus usuarios, redes conectadas y accesos por usuario. */
+/** Lista de cuentas con sus usuarios y las redes asignadas a cada uno. */
 export async function GET() {
   try {
     const auth = await requireAdmin();
     if ("response" in auth) return auth.response;
 
-    const [tenants, connection] = await Promise.all([
-      prisma.tenant.findMany({
-        orderBy: { name: "asc" },
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          fbAppId: true,
-          fbAppSecret: true,
-          createdAt: true,
-          fbConnection: { select: { fbUserName: true, tokenExpiresAt: true } },
-          users: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              role: true,
-              profileAccess: { select: { socialProfileId: true } },
-            },
-            orderBy: { name: "asc" },
+    const tenants = await prisma.tenant.findMany({
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        fbAppId: true,
+        fbAppSecret: true,
+        createdAt: true,
+        fbConnection: { select: { fbUserName: true, tokenExpiresAt: true } },
+        users: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            profileAccess: { select: { socialProfileId: true } },
           },
-          socialProfiles: {
-            select: {
-              id: true,
-              platform: true,
-              profileId: true,
-              username: true,
-              parentProfileId: true,
-            },
-            orderBy: { createdAt: "asc" },
-          },
-          _count: { select: { socialProfiles: true, posts: true } },
+          orderBy: { name: "asc" },
         },
-      }),
-      prisma.fbConnection.findUnique({
-        where: { tenantId: auth.tenantId },
-        select: { fbUserName: true, tokenExpiresAt: true },
-      }),
-    ]);
+        _count: { select: { posts: true } },
+      },
+    });
 
     return NextResponse.json({
       tenants: tenants.map((tenant) => ({
@@ -97,11 +81,8 @@ export async function GET() {
           ...user,
           socialProfileIds: profileAccess.map((access) => access.socialProfileId),
         })),
-        profiles: tenant.socialProfiles,
-        profilesCount: tenant._count.socialProfiles,
         postsCount: tenant._count.posts,
       })),
-      networks: { connected: Boolean(connection), facebook: connection },
     });
   } catch (error) {
     console.error("Error al listar las cuentas:", error);
@@ -110,8 +91,9 @@ export async function GET() {
 }
 
 /**
- * Crea una cuenta (cliente) junto con su usuario de acceso. Las credenciales
- * de la app de Facebook son opcionales al crear y se pueden cargar después.
+ * Crea una cuenta (cliente) junto con su usuario de acceso y le asigna las redes
+ * del pool que va a administrar. Las credenciales de la app de Facebook son
+ * opcionales al crear y se pueden cargar después.
  */
 export async function POST(req: Request) {
   try {
@@ -124,6 +106,7 @@ export async function POST(req: Request) {
     const password = typeof body?.password === "string" ? body.password : "";
     const fbAppId = typeof body?.fbAppId === "string" ? body.fbAppId.trim() : "";
     const fbAppSecret = typeof body?.fbAppSecret === "string" ? body.fbAppSecret.trim() : "";
+    const socialProfileIds = stringList(body?.socialProfileIds);
 
     if (!name) return badRequest("El nombre de la cuenta es obligatorio");
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return badRequest("El email es inválido");
@@ -155,41 +138,19 @@ export async function POST(req: Request) {
       select: { id: true, name: true, slug: true, users: { select: { id: true } } },
     });
 
-    const owner = tenant.users[0]?.id ?? null;
-    const pageIds = stringList(body?.pageIds);
-    const instagramIds = stringList(body?.instagramIds);
-    let imported: { imported: number; skipped: number; warnings: string[] } | null = null;
-    let warning: string | null = null;
+    const owner = tenant.users[0]?.id;
+    let grants = 0;
 
-    // La cuenta ya existe: si la importación falla se devuelve un aviso, no un error.
-    if ((pageIds.length || instagramIds.length) && owner) {
-      const connection = await prisma.fbConnection.findUnique({ where: { tenantId: auth.tenantId } });
-      if (!connection) {
-        warning =
-          "La cuenta se creó, pero conectá tu Facebook en Administración para poder importar las redes";
-      } else {
-        try {
-          const result = await importNetworks({
-            tenantId: tenant.id,
-            userId: owner,
-            userAccessToken: connection.userAccessToken,
-            pageIds,
-            instagramIds,
-          });
-          await grantProfileAccess(
-            result.profiles.map((profile) => profile.id),
-            [owner],
-          );
-          imported = {
-            imported: result.profiles.length,
-            skipped: result.skipped,
-            warnings: result.warnings,
-          };
-        } catch (error) {
-          warning = `La cuenta se creó, pero no pudimos importar las redes: ${
-            error instanceof Error ? error.message : "error desconocido"
-          }`;
-        }
+    // La cuenta ya existe: un fallo al asignar redes se informa, no rompe el alta.
+    if (owner && socialProfileIds.length) {
+      try {
+        grants = await syncProfileAccess({
+          userId: owner,
+          ownerTenantId: auth.tenantId,
+          socialProfileIds,
+        });
+      } catch (error) {
+        console.error("Error al asignar las redes:", error);
       }
     }
 
@@ -197,8 +158,7 @@ export async function POST(req: Request) {
       {
         success: true,
         tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
-        imported,
-        warning,
+        grants,
       },
       { status: 201 },
     );

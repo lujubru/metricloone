@@ -506,13 +506,12 @@ function missingRequiredFields(rejected: string[], required: string[]): string[]
 }
 
 /**
- * Trae comentarios y mensajes de las cuentas conectadas del tenant (o sólo de
- * los perfiles indicados). Cada fuente falla de forma independiente: un permiso
+ * Trae comentarios y mensajes de los perfiles indicados (las redes que el
+ * usuario administra). Cada fuente falla de forma independiente: un permiso
  * faltante se informa como advertencia en lugar de romper la sincronización.
  */
-export async function syncTenantInbox(
-  tenantId: string,
-  profileIds?: string[],
+export async function syncProfilesInbox(
+  profileIds: string[],
 ): Promise<InboxSyncSummary> {
   const summary: InboxSyncSummary = {
     threads: 0,
@@ -522,8 +521,13 @@ export async function syncTenantInbox(
     skippedSubscription: [],
   };
 
+  if (profileIds.length === 0) {
+    summary.warnings.push("No tenés redes asignadas: pedile al administrador que te habilite una.");
+    return summary;
+  }
+
   const profiles = await prisma.socialProfile.findMany({
-    where: { tenantId, ...(profileIds ? { id: { in: profileIds } } : {}) },
+    where: { id: { in: profileIds } },
     select: {
       id: true,
       tenantId: true,
@@ -619,15 +623,16 @@ export async function syncTenantInbox(
 /** Responde en un hilo: mensaje directo o comentario, según corresponda. */
 export async function sendInboxReply({
   threadId,
-  tenantId,
+  profileIds,
   body,
 }: {
   threadId: string;
-  tenantId: string;
+  /** Redes que el usuario puede administrar; el hilo tiene que ser de una de ellas. */
+  profileIds: string[];
   body: string;
 }): Promise<{ externalId: string }> {
   const thread = await prisma.inboxThread.findFirst({
-    where: { id: threadId, tenantId },
+    where: { id: threadId, socialProfileId: { in: profileIds } },
     include: { socialProfile: true },
   });
 

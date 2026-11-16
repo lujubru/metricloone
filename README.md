@@ -18,9 +18,9 @@ Flujo de uso en producción:
 
 1. El **ADMIN** configura **una sola app de Meta** (la suya) en las variables de entorno `FB_APP_ID` / `FB_APP_SECRET` y agrega la redirect URI `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
 2. Desde `/admin` conecta su propio Facebook con el botón *Conectar mi Facebook*. Ese token descubre sus Páginas e Instagram.
-3. Crea la cuenta del cliente (nombre, email, contraseña) y en el mismo formulario elige **qué redes ya vinculadas** va a administrar. También puede vincular redes después desde la tarjeta de la cuenta o asignarlas usuario por usuario.
-4. El cliente entra a `/login` con el email y la contraseña que le asignó el ADMIN y ve únicamente las redes que le tocaron. Opcionalmente puede conectar su propia app de Meta (credenciales propias de la cuenta) y sumar redes.
-5. Todo (perfiles, posts, tokens) queda aislado por `tenantId`; los accesos de cada usuario se controlan además con `SocialProfileAccess`.
+3. Crea la cuenta del cliente (nombre, email, contraseña) y en el mismo formulario elige **qué redes ya vinculadas** va a administrar. Las redes viven una sola vez en su cuenta (el "pool"): asignarlas sólo otorga permisos, no duplica perfiles ni tokens. También puede ajustarlas después, usuario por usuario.
+4. El cliente entra a `/login` con el email y la contraseña que le asignó el ADMIN y ve únicamente las redes que le tocaron. Las publicaciones se siguen haciendo con la cuenta de Facebook del ADMIN, así que Meta ve siempre al mismo dueño.
+5. Todo (perfiles, posts, tokens) queda aislado por `tenantId`; sobre el pool de redes se aplican además los permisos de `SocialProfileAccess`.
 
 > **Secretos críticos.** `NEXTAUTH_SECRET` invalida las sesiones si cambia y `APP_ENCRYPTION_KEY` hace ilegibles los App Secret guardados (habría que volver a cargarlos desde `/admin`). Se generan una vez y no se rotan.
 
@@ -29,7 +29,7 @@ Flujo de uso en producción:
 | Sección | Estado | Descripción |
 | --- | --- | --- |
 | `/login` | OK | Login propio con email y contraseña (NextAuth `credentials`). |
-| `/admin` | OK | Sólo `ADMIN`: conecta sus redes de Meta, crea cuentas (tenants) eligiendo qué redes administra cada una y asigna redes por usuario. Las credenciales de Meta por cuenta quedaron como opción avanzada. |
+| `/admin` | OK | Sólo `ADMIN`: conecta sus redes de Meta, crea cuentas (tenants) eligiendo qué redes del pool administra cada una y ajusta los permisos por usuario. Las credenciales de Meta por cuenta quedaron como opción avanzada. |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
 | `/reels` | OK | Retención de los últimos 20 Reels publicados desde la app: tiempo promedio de reproducción, porcentaje de omisión en los primeros 3 segundos y reproducciones. |
 | `/connections` | OK | Conexión OAuth con Meta, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. El cliente ve sólo las redes que el ADMIN le asignó. |
@@ -52,11 +52,11 @@ Cada **cuenta** (`Tenant`) es un espacio de trabajo aislado: tiene sus usuarios,
 - **Credenciales**: por defecto se usa la app de Meta del administrador (`FB_APP_ID` / `FB_APP_SECRET`). Si una cuenta carga sus propias credenciales, esas tienen prioridad (`resolveAppCredentials(tenant)` en `src/lib/facebook-oauth.ts`).
 - El login de Facebook **no** pasa por NextAuth: `/api/connect/facebook/start` arma el diálogo OAuth con las credenciales resueltas y `?next=/admin|/connections` decide a dónde volver; `/api/connect/facebook/callback` guarda el token de usuario en `FbConnection`.
 - Los Page Access Tokens no expiran, así que el App Secret sólo se usa durante el intercambio del código y para validar la firma del webhook.
-- **Accesos por usuario**: `SocialProfileAccess` (`userId` × `socialProfileId`, único) define qué perfiles ve cada usuario. `accessibleProfileWhere` / `accessibleProfileIds` (`src/lib/api.ts`) se aplican en `profiles`, `posts`, `inbox`, `analytics`, `reels` y las rutas de guardado, así que un usuario con sesión válida no puede leer ni publicar en redes que no le fueron asignadas.
+- **Pool de redes + accesos por usuario**: los perfiles sociales viven una sola vez, en la cuenta del ADMIN, vinculados con su Facebook. `SocialProfileAccess` (`userId` × `socialProfileId`, único) define qué perfiles del pool ve cada usuario, y `accessibleProfileWhere` / `accessibleProfileIds` (`src/lib/api.ts`) se aplican en `profiles`, `posts`, `inbox`, `analytics`, `reels` y las rutas de guardado, así que un usuario con sesión válida no puede leer ni publicar en redes que no le fueron asignadas.
 - Instagram se deriva de las Páginas ya guardadas: sólo aparecen las cuentas vinculadas a esas Páginas (`listInstagramAccounts(token, pageIds)`).
-- Todas las consultas filtran por `tenantId` **y** por los accesos del usuario; el `tenantId` sale del JWT, nunca del body.
+- Todas las consultas filtran por `tenantId` **y** por los accesos del usuario; el `tenantId` sale del JWT, nunca del body. Los `Post` del cliente se validan por su propio `tenantId`, así que puede programar contra una red del pool.
 
-Ventaja práctica: el ADMIN mantiene **una sola app** de Meta y un solo login de Facebook; cada cliente recibe acceso a las redes ya vinculadas, sin App Review ni verificación de negocio. Si un cliente prefiere usar su propia app, puede seguir haciéndolo cargando sus credenciales.
+Ventaja práctica: el ADMIN mantiene **una sola app** de Meta y un solo login de Facebook; cada cliente recibe permisos sobre las redes ya vinculadas, sin App Review ni verificación de negocio. Como todo se publica con los tokens del ADMIN, Meta ve siempre la misma cuenta dueña y el webhook es el mismo para todos. Si un cliente prefiere usar su propia app, puede seguir haciéndolo cargando sus credenciales.
 
 
 ## Puesta en marcha local
@@ -162,8 +162,8 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/tenant` | GET | Datos del tenant de la sesión (nunca devuelve el App Secret). |
 | `/api/connect/facebook/start` | GET | Inicia el OAuth con las credenciales resueltas (cuenta o plataforma). Acepta `?next=/admin\|/connections`. |
 | `/api/connect/facebook/callback` | GET | Recibe el código, guarda `FbConnection` y vuelve a `next`. |
-| `/api/admin/networks` | GET/POST | `GET`: Páginas e Instagram de la conexión del ADMIN (estado, `warnings`). `POST { tenantId, pageIds, instagramIds, userIds? }`: importa esos perfiles al tenant y otorga acceso (por defecto a todos sus usuarios). |
-| `/api/admin/tenants` | GET/POST | Lista y crea cuentas con su usuario cliente y, opcionalmente, las redes (`pageIds`/`instagramIds`) que va a administrar. `GET` devuelve `profiles` y `users[].socialProfileIds`. |
+| `/api/admin/networks` | GET | El pool de redes del ADMIN: `connected`, `facebook` y `profiles` (`id`, `platform`, `profileId`, `username`, `parentProfileId`). Sólo lectura; las redes se cargan desde `/connections`. |
+| `/api/admin/tenants` | GET/POST | Lista y crea cuentas con su usuario cliente y los permisos sobre el pool (`socialProfileIds`). `GET` devuelve `users[].socialProfileIds` y `postsCount`. |
 | `/api/admin/tenants/[id]` | PATCH/DELETE | Renombra, cambia credenciales propias o borra una cuenta. |
 | `/api/admin/users` | GET/POST | Lista y crea usuarios de una cuenta (`socialProfileIds` opcional). |
 | `/api/admin/users/[id]` | PATCH/DELETE | Edita (incluye `socialProfileIds`), o borra un usuario. |
@@ -436,9 +436,9 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
 ### Alta de un cliente nuevo (checklist)
 
 1. El cliente agrega al ADMIN como administrador de su Página de Facebook (y de la cuenta de Instagram Business asociada), o le pasa acceso desde Business Manager.
-2. En `/admin` -> *Conectar mi Facebook* (si hace falta, *Actualizar redes*) y verificar que la Página y el Instagram del cliente aparezcan en el listado.
-3. En `/admin` -> *Crear cuenta*: nombre, email, contraseña y **seleccionar las redes del cliente**. Se importan con el token del ADMIN y quedan asignadas al usuario creado.
-4. Si el cliente tiene más de un usuario, ajustar los accesos con *Asignar redes* en cada usuario (por defecto todos ven las redes de la cuenta).
+2. En `/admin` -> *Conectar mi Facebook* (si hace falta, *Actualizar redes*) y verificar que el pool liste la Página y el Instagram del cliente. Si falta alguna, agregarla desde `/connections`.
+3. En `/admin` -> *Crear cuenta*: nombre, email, contraseña y **seleccionar las redes del pool**. Quedan asignadas al usuario creado sin duplicar perfiles: todo se publica con el token del ADMIN.
+4. Si el cliente tiene más de un usuario, ajustar los permisos con *Asignar redes* en cada usuario (el ADMIN siempre ve todo el pool).
 5. Si la cuenta va a usar el **Inbox**: configurar el webhook en la app de Meta (ver [Configurar el webhook en Meta](#configurar-el-webhook-en-meta-una-vez-por-app-de-cliente)) después de vincular las Páginas.
 6. Enviar al cliente la URL de login y sus credenciales. La app del ADMIN debe estar en modo *Development* con el ADMIN como Tester, o publicada (ver *Pasar la app de un cliente a producción*).
 

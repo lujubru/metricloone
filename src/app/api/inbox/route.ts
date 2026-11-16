@@ -6,11 +6,10 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-/** Hilos del tenant con su último mensaje y el conteo de no leídos. */
+/** Hilos de las redes que administra el usuario, con su último mensaje y no leídos. */
 export async function GET(req: Request) {
   const auth = await requireTenant();
   if ("response" in auth) return auth.response;
-  const { tenantId } = auth;
 
   try {
     const { searchParams } = new URL(req.url);
@@ -22,7 +21,7 @@ export async function GET(req: Request) {
     // Cada usuario ve únicamente la bandeja de las redes que administra.
     const profileIds = await accessibleProfileIds(auth);
 
-    const where: Prisma.InboxThreadWhereInput = { tenantId, socialProfileId: { in: profileIds } };
+    const where: Prisma.InboxThreadWhereInput = { socialProfileId: { in: profileIds } };
     if (platform) where.platform = platform;
     if (kind) where.kind = kind;
     if (unreadOnly) where.messages = { some: { isRead: false, direction: DIRECTION_INBOUND } };
@@ -42,11 +41,11 @@ export async function GET(req: Request) {
         where: {
           isRead: false,
           direction: DIRECTION_INBOUND,
-          thread: { tenantId, socialProfileId: { in: profileIds } },
+          thread: { socialProfileId: { in: profileIds } },
         },
       }),
       prisma.socialProfile.findMany({
-        where: { tenantId, id: { in: profileIds } },
+        where: { id: { in: profileIds } },
         select: { id: true, platform: true, username: true, profileId: true },
         orderBy: { platform: "asc" },
       }),
