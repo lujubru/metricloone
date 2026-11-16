@@ -11,6 +11,7 @@ import {
   verifyWebhookSignature,
 } from "@/lib/inbox";
 import { INSTAGRAM_PLATFORM } from "@/lib/instagram";
+import { platformAppCredentials } from "@/lib/facebook-oauth";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -102,7 +103,8 @@ function attachmentsOf(
 /**
  * Receptor de webhooks de Meta. Un mismo callback sirve para todas las cuentas:
  * el `entry.id` identifica la Página o la cuenta de Instagram y de ahí se deduce
- * el tenant (y con él el App Secret que firma el payload).
+ * el tenant (y con él el App Secret que firma el payload). Si la plataforma tiene
+ * su propia app de Meta configurada, ese secreto firma todos los eventos.
  */
 export async function POST(req: Request) {
   const raw = await req.text();
@@ -114,6 +116,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Payload inválido" }, { status: 400 });
   }
 
+  const platformSecret = platformAppCredentials()?.appSecret ?? null;
   // Cache por tenant: el payload puede traer varias entradas de la misma cuenta.
   const secrets = new Map<string, string | null>();
 
@@ -132,15 +135,20 @@ export async function POST(req: Request) {
       continue;
     }
 
-    let secret = secrets.get(profile.tenantId);
-    if (secret === undefined) {
-      try {
-        secret = profile.tenant.fbAppSecret ? decryptSecret(profile.tenant.fbAppSecret) : null;
-      } catch (error) {
-        console.error("No se pudo descifrar el App Secret del tenant:", error);
-        secret = null;
+    let secret: string | null = platformSecret;
+    if (!secret) {
+      const cached = secrets.get(profile.tenantId);
+      if (cached === undefined) {
+        try {
+          secret = profile.tenant.fbAppSecret ? decryptSecret(profile.tenant.fbAppSecret) : null;
+        } catch (error) {
+          console.error("No se pudo descifrar el App Secret del tenant:", error);
+          secret = null;
+        }
+        secrets.set(profile.tenantId, secret);
+      } else {
+        secret = cached;
       }
-      secrets.set(profile.tenantId, secret);
     }
 
     if (!secret) {

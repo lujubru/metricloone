@@ -3,10 +3,17 @@ import bcrypt from "bcryptjs";
 import { badRequest, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { encryptSecret } from "@/lib/crypto";
+import { grantProfileAccess, importNetworks } from "@/lib/networks";
 
 export const dynamic = "force-dynamic";
 
 const SALT_ROUNDS = 10;
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
 
 function slugify(value: string): string {
   return value
@@ -31,26 +38,51 @@ async function uniqueSlug(base: string): Promise<string> {
   return slug;
 }
 
-/** Lista de cuentas con sus usuarios y páginas conectadas. */
+/** Lista de cuentas con sus usuarios, redes conectadas y accesos por usuario. */
 export async function GET() {
   try {
     const auth = await requireAdmin();
     if ("response" in auth) return auth.response;
 
-    const tenants = await prisma.tenant.findMany({
-      orderBy: { name: "asc" },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        fbAppId: true,
-        fbAppSecret: true,
-        createdAt: true,
-        fbConnection: { select: { fbUserName: true, tokenExpiresAt: true } },
-        users: { select: { id: true, name: true, email: true, role: true }, orderBy: { name: "asc" } },
-        _count: { select: { socialProfiles: true, posts: true } },
-      },
-    });
+    const [tenants, connection] = await Promise.all([
+      prisma.tenant.findMany({
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          fbAppId: true,
+          fbAppSecret: true,
+          createdAt: true,
+          fbConnection: { select: { fbUserName: true, tokenExpiresAt: true } },
+          users: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              role: true,
+              profileAccess: { select: { socialProfileId: true } },
+            },
+            orderBy: { name: "asc" },
+          },
+          socialProfiles: {
+            select: {
+              id: true,
+              platform: true,
+              profileId: true,
+              username: true,
+              parentProfileId: true,
+            },
+            orderBy: { createdAt: "asc" },
+          },
+          _count: { select: { socialProfiles: true, posts: true } },
+        },
+      }),
+      prisma.fbConnection.findUnique({
+        where: { tenantId: auth.tenantId },
+        select: { fbUserName: true, tokenExpiresAt: true },
+      }),
+    ]);
 
     return NextResponse.json({
       tenants: tenants.map((tenant) => ({
@@ -61,10 +93,15 @@ export async function GET() {
         hasAppSecret: Boolean(tenant.fbAppSecret),
         createdAt: tenant.createdAt,
         facebook: tenant.fbConnection,
-        users: tenant.users,
+        users: tenant.users.map(({ profileAccess, ...user }) => ({
+          ...user,
+          socialProfileIds: profileAccess.map((access) => access.socialProfileId),
+        })),
+        profiles: tenant.socialProfiles,
         profilesCount: tenant._count.socialProfiles,
         postsCount: tenant._count.posts,
       })),
+      networks: { connected: Boolean(connection), facebook: connection },
     });
   } catch (error) {
     console.error("Error al listar las cuentas:", error);
@@ -115,10 +152,56 @@ export async function POST(req: Request) {
           },
         },
       },
-      select: { id: true, name: true, slug: true },
+      select: { id: true, name: true, slug: true, users: { select: { id: true } } },
     });
 
-    return NextResponse.json({ success: true, tenant }, { status: 201 });
+    const owner = tenant.users[0]?.id ?? null;
+    const pageIds = stringList(body?.pageIds);
+    const instagramIds = stringList(body?.instagramIds);
+    let imported: { imported: number; skipped: number; warnings: string[] } | null = null;
+    let warning: string | null = null;
+
+    // La cuenta ya existe: si la importación falla se devuelve un aviso, no un error.
+    if ((pageIds.length || instagramIds.length) && owner) {
+      const connection = await prisma.fbConnection.findUnique({ where: { tenantId: auth.tenantId } });
+      if (!connection) {
+        warning =
+          "La cuenta se creó, pero conectá tu Facebook en Administración para poder importar las redes";
+      } else {
+        try {
+          const result = await importNetworks({
+            tenantId: tenant.id,
+            userId: owner,
+            userAccessToken: connection.userAccessToken,
+            pageIds,
+            instagramIds,
+          });
+          await grantProfileAccess(
+            result.profiles.map((profile) => profile.id),
+            [owner],
+          );
+          imported = {
+            imported: result.profiles.length,
+            skipped: result.skipped,
+            warnings: result.warnings,
+          };
+        } catch (error) {
+          warning = `La cuenta se creó, pero no pudimos importar las redes: ${
+            error instanceof Error ? error.message : "error desconocido"
+          }`;
+        }
+      }
+    }
+
+    return NextResponse.json(
+      {
+        success: true,
+        tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
+        imported,
+        warning,
+      },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Error al crear la cuenta:", error);
     return serverError();

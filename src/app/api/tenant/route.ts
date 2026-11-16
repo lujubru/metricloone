@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenant, serverError } from "@/lib/api";
+import { platformAppCredentials } from "@/lib/facebook-oauth";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -33,8 +34,10 @@ export async function GET() {
         id: tenant.id,
         name: tenant.name,
         slug: tenant.slug,
-        fbAppId: tenant.fbAppId,
-        hasCredentials: Boolean(tenant.fbAppId && tenant.fbAppSecret),
+        fbAppId: platformAppCredentials()?.appId ?? tenant.fbAppId,
+        // Basta con que haya credenciales de la plataforma o las propias del cliente.
+        hasCredentials:
+          platformAppCredentials() !== null || Boolean(tenant.fbAppId && tenant.fbAppSecret),
         facebook: tenant.fbConnection,
       },
       user: { id: auth.user.id, name: auth.user.name, email: auth.user.email, role: auth.user.role },

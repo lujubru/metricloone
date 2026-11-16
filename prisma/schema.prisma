@@ -49,6 +49,7 @@ model User {
   accounts      Account[]
   sessions      Session[]
   socialProfiles SocialProfile[]
+  profileAccess SocialProfileAccess[]
   posts         Post[]
   tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
@@ -126,9 +127,25 @@ model SocialProfile {
   user          User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
   posts         Post[]
   inboxThreads  InboxThread[]
+  access        SocialProfileAccess[]
 
   @@unique([tenantId, platform, profileId])
   @@index([tenantId])
+}
+
+// Qué redes puede administrar cada usuario. El ADMIN ve todas las de su cuenta;
+// los CLIENT sólo las que tengan una fila acá.
+model SocialProfileAccess {
+  id              String   @id @default(cuid())
+  userId          String
+  socialProfileId String
+  createdAt       DateTime @default(now())
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialProfile SocialProfile @relation(fields: [socialProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, socialProfileId])
+  @@index([socialProfileId])
 }
 
 model Post {

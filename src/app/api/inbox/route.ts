@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
-import { requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileIds, requireTenant, serverError } from "@/lib/api";
 import { DIRECTION_INBOUND } from "@/lib/inbox";
 import { prisma } from "@/lib/prisma";
 
@@ -19,7 +19,10 @@ export async function GET(req: Request) {
     const unreadOnly = searchParams.get("unread") === "1";
     const limit = Math.min(Number(searchParams.get("limit") ?? 60) || 60, 200);
 
-    const where: Prisma.InboxThreadWhereInput = { tenantId };
+    // Cada usuario ve únicamente la bandeja de las redes que administra.
+    const profileIds = await accessibleProfileIds(auth);
+
+    const where: Prisma.InboxThreadWhereInput = { tenantId, socialProfileId: { in: profileIds } };
     if (platform) where.platform = platform;
     if (kind) where.kind = kind;
     if (unreadOnly) where.messages = { some: { isRead: false, direction: DIRECTION_INBOUND } };
@@ -36,10 +39,14 @@ export async function GET(req: Request) {
         },
       }),
       prisma.inboxMessage.count({
-        where: { isRead: false, direction: DIRECTION_INBOUND, thread: { tenantId } },
+        where: {
+          isRead: false,
+          direction: DIRECTION_INBOUND,
+          thread: { tenantId, socialProfileId: { in: profileIds } },
+        },
       }),
       prisma.socialProfile.findMany({
-        where: { tenantId },
+        where: { tenantId, id: { in: profileIds } },
         select: { id: true, platform: true, username: true, profileId: true },
         orderBy: { platform: "asc" },
       }),

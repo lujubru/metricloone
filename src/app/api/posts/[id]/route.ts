@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { badRequest, requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, badRequest, requireTenant, serverError } from "@/lib/api";
+import type { TenantAuth } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { validatePostPayload } from "@/lib/post-validation";
 
@@ -7,6 +8,14 @@ export const dynamic = "force-dynamic";
 
 function notFound() {
   return NextResponse.json({ error: "Post no encontrado" }, { status: 404 });
+}
+
+function visiblePostWhere(auth: TenantAuth, id: string) {
+  return {
+    id,
+    tenantId: auth.tenantId,
+    socialProfile: { is: accessibleProfileWhere(auth) },
+  };
 }
 
 export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }) {
@@ -18,7 +27,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
     const body = await req.json().catch(() => null);
     const { scheduledFor, content, mediaUrls, postType } = body || {};
 
-    const post = await prisma.post.findFirst({ where: { id, tenantId: auth.tenantId } });
+    const post = await prisma.post.findFirst({ where: visiblePostWhere(auth, id) });
     if (!post) return notFound();
 
     if (post.status === "PUBLISHING") {
@@ -88,7 +97,7 @@ export async function DELETE(_req: Request, context: { params: Promise<{ id: str
 
     const { id } = await context.params;
 
-    const post = await prisma.post.findFirst({ where: { id, tenantId: auth.tenantId } });
+    const post = await prisma.post.findFirst({ where: visiblePostWhere(auth, id) });
     if (!post) return notFound();
 
     await prisma.post.delete({ where: { id } });

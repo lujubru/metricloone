@@ -16,10 +16,11 @@ Clon funcional (MVP) de Metricool: panel para conectar perfiles sociales, planif
 
 Flujo de uso en producción:
 
-1. El **ADMIN** entra a `/login` y desde `/admin` crea una cuenta por cliente (nombre, email, contraseña, App ID y App Secret de Facebook).
-2. Cada cliente agrega en **su** app de Meta la redirect URI `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
-3. El cliente entra a `/login` desde cualquier equipo con el email y la contraseña que le asignó el ADMIN, conecta su Facebook en `/connections` e importa Páginas e Instagram.
-4. Todo (perfiles, posts, tokens) queda aislado por `tenantId`; el ADMIN no ve los datos de un cliente en el dashboard salvo que entre con el usuario de ese cliente.
+1. El **ADMIN** configura **una sola app de Meta** (la suya) en las variables de entorno `FB_APP_ID` / `FB_APP_SECRET` y agrega la redirect URI `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
+2. Desde `/admin` conecta su propio Facebook con el botón *Conectar mi Facebook*. Ese token descubre sus Páginas e Instagram.
+3. Crea la cuenta del cliente (nombre, email, contraseña) y en el mismo formulario elige **qué redes ya vinculadas** va a administrar. También puede vincular redes después desde la tarjeta de la cuenta o asignarlas usuario por usuario.
+4. El cliente entra a `/login` con el email y la contraseña que le asignó el ADMIN y ve únicamente las redes que le tocaron. Opcionalmente puede conectar su propia app de Meta (credenciales propias de la cuenta) y sumar redes.
+5. Todo (perfiles, posts, tokens) queda aislado por `tenantId`; los accesos de cada usuario se controlan además con `SocialProfileAccess`.
 
 > **Secretos críticos.** `NEXTAUTH_SECRET` invalida las sesiones si cambia y `APP_ENCRYPTION_KEY` hace ilegibles los App Secret guardados (habría que volver a cargarlos desde `/admin`). Se generan una vez y no se rotan.
 
@@ -28,10 +29,10 @@ Flujo de uso en producción:
 | Sección | Estado | Descripción |
 | --- | --- | --- |
 | `/login` | OK | Login propio con email y contraseña (NextAuth `credentials`). |
-| `/admin` | OK | Sólo `ADMIN`: crea cuentas (tenants), carga el App ID/Secret de Facebook de cada una y gestiona sus usuarios. |
+| `/admin` | OK | Sólo `ADMIN`: conecta sus redes de Meta, crea cuentas (tenants) eligiendo qué redes administra cada una y asigna redes por usuario. Las credenciales de Meta por cuenta quedaron como opción avanzada. |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
 | `/reels` | OK | Retención de los últimos 20 Reels publicados desde la app: tiempo promedio de reproducción, porcentaje de omisión en los primeros 3 segundos y reproducciones. |
-| `/connections` | OK | Conexión OAuth con la app de Facebook **de la propia cuenta**, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. |
+| `/connections` | OK | Conexión OAuth con Meta, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. El cliente ve sólo las redes que el ADMIN le asignó. |
 | `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Permite **subir imágenes y videos** (varios por publicación) y elegir entre **Publicación** o **Historia**. Vistas **Día / Semana / Mes** reales, filtros por perfil, red, tipo y estado, navegación de período y el botón **Nuevo post** del topbar habilitado. Muestra miniaturas, el tipo, el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
 | `/settings` | OK | Datos de la sesión, cierre de sesión y desconexión de perfiles. |
 | `/smartlink` | WIP | Constructor de página "link in bio". Solo estado en cliente (sin persistencia). |
@@ -46,14 +47,16 @@ Flujo de uso en producción:
 
 ## Multi-tenant
 
-Cada **cuenta** (`Tenant`) es un espacio de trabajo aislado: tiene sus usuarios, sus perfiles sociales, sus publicaciones y **su propia app de Facebook** (`fbAppId` + `fbAppSecret` cifrado con AES-256-GCM).
+Cada **cuenta** (`Tenant`) es un espacio de trabajo aislado: tiene sus usuarios, sus perfiles sociales, sus publicaciones y opcionalmente **su propia app de Facebook** (`fbAppId` + `fbAppSecret` cifrado con AES-256-GCM).
 
-- El login de Facebook **no** pasa por NextAuth: `/api/connect/facebook/start` arma el diálogo OAuth con el App ID del tenant y `/api/connect/facebook/callback` guarda el token de usuario en `FbConnection`.
-- Los Page Access Tokens no expiran, así que el App Secret sólo se usa durante el intercambio del código.
+- **Credenciales**: por defecto se usa la app de Meta del administrador (`FB_APP_ID` / `FB_APP_SECRET`). Si una cuenta carga sus propias credenciales, esas tienen prioridad (`resolveAppCredentials(tenant)` en `src/lib/facebook-oauth.ts`).
+- El login de Facebook **no** pasa por NextAuth: `/api/connect/facebook/start` arma el diálogo OAuth con las credenciales resueltas y `?next=/admin|/connections` decide a dónde volver; `/api/connect/facebook/callback` guarda el token de usuario en `FbConnection`.
+- Los Page Access Tokens no expiran, así que el App Secret sólo se usa durante el intercambio del código y para validar la firma del webhook.
+- **Accesos por usuario**: `SocialProfileAccess` (`userId` × `socialProfileId`, único) define qué perfiles ve cada usuario. `accessibleProfileWhere` / `accessibleProfileIds` (`src/lib/api.ts`) se aplican en `profiles`, `posts`, `inbox`, `analytics`, `reels` y las rutas de guardado, así que un usuario con sesión válida no puede leer ni publicar en redes que no le fueron asignadas.
 - Instagram se deriva de las Páginas ya guardadas: sólo aparecen las cuentas vinculadas a esas Páginas (`listInstagramAccounts(token, pageIds)`).
-- Todas las consultas (`profiles`, `posts`, `publish`) filtran por `tenantId`; el `tenantId` sale del JWT, nunca del body.
+- Todas las consultas filtran por `tenantId` **y** por los accesos del usuario; el `tenantId` sale del JWT, nunca del body.
 
-Ventaja práctica: si cada cliente usa **su propia app** de Meta, su usuario de Facebook es Administrador/Tester de esa app y el flujo funciona en modo *Development*, sin App Review ni verificación de negocio.
+Ventaja práctica: el ADMIN mantiene **una sola app** de Meta y un solo login de Facebook; cada cliente recibe acceso a las redes ya vinculadas, sin App Review ni verificación de negocio. Si un cliente prefiere usar su propia app, puede seguir haciéndolo cargando sus credenciales.
 
 
 ## Puesta en marcha local
@@ -76,6 +79,8 @@ Abre `http://localhost:3000`, entrá con el usuario administrador y creá las cu
 | `NEXTAUTH_SECRET` | Si | Secreto para firmar la sesión (`openssl rand -base64 32`). |
 | `NEXTAUTH_URL` | Si | URL pública de la app (ej. `https://mi-dominio.com`). También define la redirect URI que se muestra en `/admin`. |
 | `APP_ENCRYPTION_KEY` | Si | Clave con la que se cifran los App Secret de cada tenant. Si cambia, hay que volver a cargarlos. |
+| `FB_APP_ID` | Si | App ID de Meta del administrador (una sola para todos los clientes). Si falta, se usa `FACEBOOK_CLIENT_ID`. |
+| `FB_APP_SECRET` | Si | App Secret de la app del administrador; se usa para el OAuth y para validar la firma del webhook. Alias de respaldo: `FACEBOOK_CLIENT_SECRET`. |
 | `ADMIN_EMAIL` | Si (bootstrap) | Email del primer administrador. |
 | `ADMIN_PASSWORD` | Si (bootstrap) | Contraseña del primer administrador (mínimo 8 caracteres). |
 | `ADMIN_NAME` | No | Nombre del primer administrador. |
@@ -87,9 +92,9 @@ Abre `http://localhost:3000`, entrá con el usuario administrador y creá las cu
 | `LEGAL_CONTACT_EMAIL` | No | Email de contacto que muestran `/privacy` y `/data-deletion` (default `soporte@pixeldesarrollo.com`). |
 | `NEXT_PUBLIC_APP_NAME` | No | Nombre visible en las páginas legales (default `Metricool Clone`). |
 
-Las credenciales de Facebook **no** van en variables de entorno: se cargan por cuenta desde `/admin`.
+Las credenciales de Meta son **globales** (`FB_APP_ID` / `FB_APP_SECRET`) y las usa el ADMIN para vincular las redes desde `/admin`. Una cuenta puede sobrescribirlas cargando su propio App ID/Secret desde la tarjeta de la cuenta.
 
-En cada app de Meta hay que agregar la redirect URI de OAuth válida:
+En la app de Meta hay que agregar la redirect URI de OAuth válida:
 
 ```
 https://<tu-dominio>/api/connect/facebook/callback
@@ -119,11 +124,11 @@ Causas habituales, en orden de frecuencia:
 
 Para verificar qué está pasando con un token concreto: `/me/permissions` (permisos concedidos) y `/me/accounts` (Páginas visibles).
 
-### Pasar la app de un cliente a producción
+### Pasar la app de Meta a producción
 
-Normalmente **no hace falta**: si el cliente tiene rol Administrador/Desarrollador en su propia app de Meta, el login y la publicación funcionan con la app en modo *Development*.
+Normalmente **no hace falta**: como el ADMIN conecta su propio Facebook con su app, el login y la publicación funcionan con la app en modo *Development* mientras el ADMIN figure como Administrador/Desarrollador/Tester.
 
-Sólo si se quiere que usuarios sin rol en la app puedan conectar (por ejemplo, que un community manager conecte su propio Facebook) hay que pasar esa app a Live:
+Sólo si se quiere que usuarios sin rol en la app puedan conectar (por ejemplo, que un community manager conecte su propio Facebook) hay que pasar la app a Live:
 
 1. Completar en *App Settings → Basic*: dominios, Privacy Policy URL (`/privacy`), Terms of Service URL, User Data Deletion (`/data-deletion`), ícono (PNG sin canal alfa) y categoría.
 2. Verificar el negocio en Meta Business Suite.
@@ -155,12 +160,13 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | --- | --- | --- |
 | `/api/auth/[...nextauth]` | GET/POST | Login/logout con email y contraseña. |
 | `/api/tenant` | GET | Datos del tenant de la sesión (nunca devuelve el App Secret). |
-| `/api/connect/facebook/start` | GET | Inicia el OAuth con la app de Facebook del tenant. |
-| `/api/connect/facebook/callback` | GET | Recibe el código, guarda `FbConnection` y vuelve a `/connections`. |
-| `/api/admin/tenants` | GET/POST | Lista y crea cuentas con su usuario cliente y credenciales. |
-| `/api/admin/tenants/[id]` | PATCH/DELETE | Renombra, cambia credenciales o borra una cuenta. |
-| `/api/admin/users` | GET/POST | Lista y crea usuarios de una cuenta. |
-| `/api/admin/users/[id]` | PATCH/DELETE | Edita o borra un usuario. |
+| `/api/connect/facebook/start` | GET | Inicia el OAuth con las credenciales resueltas (cuenta o plataforma). Acepta `?next=/admin\|/connections`. |
+| `/api/connect/facebook/callback` | GET | Recibe el código, guarda `FbConnection` y vuelve a `next`. |
+| `/api/admin/networks` | GET/POST | `GET`: Páginas e Instagram de la conexión del ADMIN (estado, `warnings`). `POST { tenantId, pageIds, instagramIds, userIds? }`: importa esos perfiles al tenant y otorga acceso (por defecto a todos sus usuarios). |
+| `/api/admin/tenants` | GET/POST | Lista y crea cuentas con su usuario cliente y, opcionalmente, las redes (`pageIds`/`instagramIds`) que va a administrar. `GET` devuelve `profiles` y `users[].socialProfileIds`. |
+| `/api/admin/tenants/[id]` | PATCH/DELETE | Renombra, cambia credenciales propias o borra una cuenta. |
+| `/api/admin/users` | GET/POST | Lista y crea usuarios de una cuenta (`socialProfileIds` opcional). |
+| `/api/admin/users/[id]` | PATCH/DELETE | Edita (incluye `socialProfileIds`), o borra un usuario. |
 | `/api/facebook/pages` | GET | Lista las Páginas del token guardado (paginado + Páginas de Business Portfolio) y devuelve `warnings` con los permisos faltantes. |
 | `/api/facebook/save-pages` | POST | Guarda las Páginas seleccionadas como `SocialProfile` (revalida contra la Graph API). |
 | `/api/instagram/accounts` | GET | Lista las cuentas de Instagram Business vinculadas a las **Páginas ya conectadas** (sin exponer tokens). |
@@ -180,7 +186,7 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/inbox/[id]/reply` | POST | Responde al hilo: mensaje directo si es `MESSAGE`, respuesta al comentario si es `COMMENT`. Persiste el `OUTBOUND` en la misma transacción. |
 | `/api/inbox/sync` | POST | Trae comentarios y mensajes de todas las cuentas conectadas (`maxDuration` 60 s) y devuelve `imported` más `warnings` por fuente. |
 | `/api/inbox/setup` | GET | Diagnóstico: `callbackUrl` del webhook, si `META_WEBHOOK_VERIFY_TOKEN` está definida, campos requeridos y, por cuenta, qué campos ya están suscriptos. |
-| `/api/webhooks/meta` | GET/POST | Webhook público de Meta. `GET` responde el `hub.challenge` de la verificación; `POST` valida `X-Hub-Signature-256` con el App Secret **del tenant dueño del perfil** e ingesta el evento. |
+| `/api/webhooks/meta` | GET/POST | Webhook público de Meta. `GET` responde el `hub.challenge` de la verificación; `POST` valida `X-Hub-Signature-256` con el App Secret **del tenant dueño del perfil** o, si la cuenta no tiene credenciales propias, con el de la plataforma, e ingesta el evento. |
 
 ## Publicación automática
 
@@ -345,16 +351,16 @@ El endpoint `POST /api/inbox/[id]/reply` sigue existiendo y es funcional, pero l
 
 La respuesta se guarda como mensaje `OUTBOUND` con `upsert` sobre `externalId` (el eco del webhook puede llegar antes de que termine la request) y quien invoque el endpoint obtiene el hilo actualizado. Los rechazos de Meta se devuelven con el mensaje original y quedan en el log del servidor junto al `code` de la Graph API.
 
-### Configurar el webhook en Meta (una vez por app de cliente)
+### Configurar el webhook en Meta (una vez, en la app del ADMIN)
 
 1. Definir `META_WEBHOOK_VERIFY_TOKEN` en el entorno (cadena larga y aleatoria) y redeployar.
-2. En la app de Meta del cliente -> **Webhooks** -> *Page* (y *Instagram* si la cuenta está suscripta a ese objeto):
+2. En la app de Meta del ADMIN -> **Webhooks** -> *Page* (y *Instagram* si la cuenta está suscripta a ese objeto):
    - **Callback URL**: `https://<tu-dominio>/api/webhooks/meta`
    - **Verify token**: el mismo valor de `META_WEBHOOK_VERIFY_TOKEN`
 3. Suscribir los campos de **Page**: `feed`, `messages`, `messaging_postbacks`, `message_reactions`, `message_reads`; y los de **Instagram**: `comments`, `mentions`, `messages`, `messaging_postbacks`, `message_reactions`, `message_reads`. Las listas viven en `PAGE_WEBHOOK_FIELDS` e `INSTAGRAM_WEBHOOK_FIELDS` (`src/lib/inbox.ts`) y `GET /api/inbox/setup` muestra cuáles faltan por cuenta. `comments` y `mentions` son campos del objeto *Instagram*: pedirlos sobre la Página hace que Meta rechace la llamada.
 4. La **suscripción a la app la hace el propio código**: al guardar Páginas en `/connections` se llama `POST /{page-id}/subscribed_apps`, y `POST /api/inbox/sync` suscribe además cada cuenta de Instagram con `POST /{ig-user-id}/subscribed_apps`. Si Meta rechaza un campo se reintenta sin él para que los imprescindibles sobrevivan; sólo se avisa en la UI cuando falta `feed`/`messages` en una Página o `comments`/`messages` en Instagram, porque el resto son opcionales.
 
-**Verificación de firma multi-tenant**: cada tenant tiene su propia app de Meta. El `POST` del webhook busca el `SocialProfile` por `entry.id`, descifra el `fbAppSecret` de **ese** tenant (`src/lib/crypto.ts`) y valida `X-Hub-Signature-256` con HMAC-SHA256 en tiempo constante. Si la firma no coincide se descarta la entrada. El endpoint **siempre responde 200** (Meta deshabilita el webhook ante cualquier otro código): los errores se loguean y se saltea la entrada.
+**Verificación de firma**: el `POST` del webhook busca el `SocialProfile` por `entry.id` y valida `X-Hub-Signature-256` con HMAC-SHA256 en tiempo constante: primero con el `fbAppSecret` propio de **ese** tenant (si lo tiene) y, si no hay credenciales propias, con `FB_APP_SECRET` de la plataforma. Si la firma no coincide se descarta la entrada. El endpoint **siempre responde 200** (Meta deshabilita el webhook ante cualquier otro código): los errores se loguean y se saltea la entrada.
 
 La ruta es pública: `src/proxy.ts` sólo matchea páginas (excluye `api`), así que no hay que agregarla a `PUBLIC_PATHS`.
 
@@ -400,9 +406,11 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
    ADMIN_NAME=<nombre visible>
    SCHEDULER_ENABLED=true
    META_WEBHOOK_VERIFY_TOKEN=<cadena larga y aleatoria>   # webhook del Inbox
+   FB_APP_ID=<app de Meta del administrador>
+   FB_APP_SECRET=<secreto de esa app>
    ```
 
-   `FACEBOOK_CLIENT_ID` / `FACEBOOK_CLIENT_SECRET` **ya no se usan** (cada tenant tiene su propia app) y `CRON_SECRET` sólo hace falta si se usa el cron externo.
+   `FB_APP_ID` / `FB_APP_SECRET` son la app de Meta con la que el ADMIN vincula las redes de todos los clientes (se aceptan como alias `FACEBOOK_CLIENT_ID` / `FACEBOOK_CLIENT_SECRET`). `CRON_SECRET` sólo hace falta si se usa el cron externo.
 
    Para generar la clave de cifrado:
 
@@ -423,16 +431,16 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
 5. Verificación mínima:
    - `GET /api/auth/providers` devuelve **sólo** `credentials`.
    - `/login` responde 200 y `/connections` sin sesión redirige a `/login?callbackUrl=...`.
-   - Login con `ADMIN_EMAIL` -> `/admin` lista la cuenta *principal* -> se le cargan App ID/Secret -> `/connections` conecta Facebook, importa Páginas e Instagram -> se crea y publica un post.
+   - Login con `ADMIN_EMAIL` -> `/admin` -> *Conectar mi Facebook* -> *Crear cuenta* eligiendo redes -> el cliente sólo ve esas redes en `/connections`, `/planning` e `/inbox`, y puede publicar.
 
 ### Alta de un cliente nuevo (checklist)
 
-1. En Meta for Developers, crear la app del cliente (tipo *Business*) y agregar el producto *Facebook Login*.
-2. En *Facebook Login -> Settings -> Valid OAuth Redirect URIs*: `https://metricool.pixeldesarrollo.com/api/connect/facebook/callback`.
-3. En *App Settings -> Basic*: Privacy Policy `https://metricool.pixeldesarrollo.com/privacy`, Data Deletion `https://metricool.pixeldesarrollo.com/data-deletion`, ícono PNG **sin canal alfa**. En *Terms of Service* no hay página propia todavía: repetir la URL de `/privacy` o crear `/terms` (el proxy ya la tiene como ruta pública).
-4. En `/admin` -> *Crear cuenta*: nombre, email, contraseña, App ID y App Secret. (Si más adelante cambia el secret, se actualiza con el botón de credenciales de esa tarjeta.)
-5. Si la cuenta va a usar el **Inbox**: configurar el webhook en la app del cliente (ver [Configurar el webhook en Meta](#configurar-el-webhook-en-meta-una-vez-por-app-de-cliente)) después de conectar las Páginas.
-6. Enviar al cliente la URL de login y sus credenciales. Con la app en modo *Development* necesita figurar como Administrador/Desarrollador/Tester de la app; si no, hay que publicarla (ver *Pasar la app de un cliente a producción*).
+1. El cliente agrega al ADMIN como administrador de su Página de Facebook (y de la cuenta de Instagram Business asociada), o le pasa acceso desde Business Manager.
+2. En `/admin` -> *Conectar mi Facebook* (si hace falta, *Actualizar redes*) y verificar que la Página y el Instagram del cliente aparezcan en el listado.
+3. En `/admin` -> *Crear cuenta*: nombre, email, contraseña y **seleccionar las redes del cliente**. Se importan con el token del ADMIN y quedan asignadas al usuario creado.
+4. Si el cliente tiene más de un usuario, ajustar los accesos con *Asignar redes* en cada usuario (por defecto todos ven las redes de la cuenta).
+5. Si la cuenta va a usar el **Inbox**: configurar el webhook en la app de Meta (ver [Configurar el webhook en Meta](#configurar-el-webhook-en-meta-una-vez-por-app-de-cliente)) después de vincular las Páginas.
+6. Enviar al cliente la URL de login y sus credenciales. La app del ADMIN debe estar en modo *Development* con el ADMIN como Tester, o publicada (ver *Pasar la app de un cliente a producción*).
 
 ## Problemas conocidos y soluciones
 

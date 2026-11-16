@@ -4,8 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   AlertCircle,
+  Camera,
   CheckCircle2,
   Copy,
+  Globe,
+  Link2,
   Loader2,
   Plus,
   RefreshCw,
@@ -14,7 +17,23 @@ import {
   Users,
 } from "lucide-react";
 
-type AdminUser = { id: string; name: string; email: string; role: string };
+const INSTAGRAM_PLATFORM = "instagram_business";
+
+type AdminProfile = {
+  id: string;
+  platform: string;
+  profileId: string;
+  username: string | null;
+  parentProfileId: string | null;
+};
+
+type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  socialProfileIds: string[];
+};
 
 type AdminTenant = {
   id: string;
@@ -25,9 +44,37 @@ type AdminTenant = {
   createdAt: string;
   facebook: { fbUserName: string | null; tokenExpiresAt: string | null } | null;
   users: AdminUser[];
+  profiles: AdminProfile[];
   profilesCount: number;
   postsCount: number;
 };
+
+type AvailablePage = { id: string; name: string; category: string | null };
+
+type AvailableInstagram = {
+  id: string;
+  username: string | null;
+  pageId: string;
+  pageName: string | null;
+  followersCount: number | null;
+  profilePictureUrl: string | null;
+};
+
+type Networks = {
+  connected: boolean;
+  facebook: { fbUserName: string | null; tokenExpiresAt: string | null } | null;
+  pages: AvailablePage[];
+  instagram: AvailableInstagram[];
+  warnings: string[];
+};
+
+type Selection = { pageIds: string[]; instagramIds: string[] };
+
+const EMPTY_SELECTION: Selection = { pageIds: [], instagramIds: [] };
+
+function toggleId(list: string[], id: string): string[] {
+  return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
+}
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -61,9 +108,165 @@ function Field({
   );
 }
 
+function CheckRow({
+  checked,
+  onChange,
+  icon,
+  title,
+  subtitle,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  icon?: React.ReactNode;
+  title: string;
+  subtitle?: string | null;
+  disabled?: boolean;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.6rem",
+        padding: "0.5rem 0.65rem",
+        borderRadius: "var(--radius-md)",
+        border: "1px solid var(--border-color)",
+        background: checked ? "var(--bg-color)" : "transparent",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        disabled={disabled}
+        style={{ accentColor: "var(--accent-color, #2563eb)" }}
+      />
+      {icon}
+      <span style={{ display: "grid", lineHeight: 1.25 }}>
+        <span style={{ fontSize: "0.9rem" }}>{title}</span>
+        {subtitle && (
+          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{subtitle}</span>
+        )}
+      </span>
+    </label>
+  );
+}
+
+/**
+ * Selector de las redes que el administrador ya tiene vinculadas con su propia
+ * cuenta de Facebook. Se usa tanto al crear la cuenta como al sumar redes a una
+ * cuenta existente.
+ */
+function NetworkPicker({
+  networks,
+  selection,
+  onChange,
+  loading,
+}: {
+  networks: Networks | null;
+  selection: Selection;
+  onChange: (next: Selection) => void;
+  loading?: boolean;
+}) {
+  if (loading) {
+    return (
+      <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+        <Loader2 className="spin" size={14} style={{ verticalAlign: "-2px", marginRight: 6 }} />
+        Buscando tus redes de Meta…
+      </p>
+    );
+  }
+
+  if (!networks?.connected) {
+    return (
+      <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+        Conectá tu cuenta de Facebook desde la tarjeta de arriba y acá van a aparecer tus Páginas y
+        cuentas de Instagram.
+      </p>
+    );
+  }
+
+  if (!networks.pages.length && !networks.instagram.length) {
+    return (
+      <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+        No encontramos Páginas ni cuentas de Instagram en tu cuenta de Facebook.
+      </p>
+    );
+  }
+
+  const instagramByPage = new Map<string, AvailableInstagram[]>();
+  for (const account of networks.instagram) {
+    const list = instagramByPage.get(account.pageId) ?? [];
+    list.push(account);
+    instagramByPage.set(account.pageId, list);
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "0.5rem" }}>
+      {networks.pages.map((page) => {
+        const accounts = instagramByPage.get(page.id) ?? [];
+        return (
+          <div key={page.id} style={{ display: "grid", gap: "0.35rem" }}>
+            <CheckRow
+              checked={selection.pageIds.includes(page.id)}
+              onChange={() =>
+                onChange({ ...selection, pageIds: toggleId(selection.pageIds, page.id) })
+              }
+              icon={<Globe size={16} color="#1877f2" />}
+              title={page.name}
+              subtitle={page.category}
+            />
+            {accounts.map((account) => (
+              <div key={account.id} style={{ paddingLeft: "1.75rem" }}>
+                <CheckRow
+                  checked={selection.instagramIds.includes(account.id)}
+                  onChange={() =>
+                    onChange({
+                      ...selection,
+                      instagramIds: toggleId(selection.instagramIds, account.id),
+                    })
+                  }
+                  icon={<Camera size={16} color="#e1306c" />}
+                  title={`@${account.username ?? account.id}`}
+                  subtitle={
+                    account.followersCount != null
+                      ? `${account.followersCount.toLocaleString("es-AR")} seguidores`
+                      : `Vinculada a ${page.name}`
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        );
+      })}
+      {networks.instagram
+        .filter((account) => !networks.pages.some((page) => page.id === account.pageId))
+        .map((account) => (
+          <CheckRow
+            key={account.id}
+            checked={selection.instagramIds.includes(account.id)}
+            onChange={() =>
+              onChange({
+                ...selection,
+                instagramIds: toggleId(selection.instagramIds, account.id),
+              })
+            }
+            icon={<Camera size={16} color="#e1306c" />}
+            title={`@${account.username ?? account.id}`}
+            subtitle={account.pageName ? `Vinculada a ${account.pageName}` : null}
+          />
+        ))}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const { data: session, status } = useSession();
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
+  const [networks, setNetworks] = useState<Networks | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -73,21 +276,44 @@ export default function AdminPage() {
     name: "",
     email: "",
     password: "",
-    fbAppId: "",
-    fbAppSecret: "",
   });
+  const [newSelection, setNewSelection] = useState<Selection>(EMPTY_SELECTION);
 
   const [credentialsFor, setCredentialsFor] = useState<string | null>(null);
   const [creds, setCreds] = useState({ fbAppId: "", fbAppSecret: "" });
+
+  const [importFor, setImportFor] = useState<string | null>(null);
+  const [importSelection, setImportSelection] = useState<Selection>(EMPTY_SELECTION);
+
+  const [accessFor, setAccessFor] = useState<string | null>(null);
+  const [accessDraft, setAccessDraft] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/admin/tenants", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "No se pudieron cargar las cuentas");
-      setTenants(data.tenants ?? []);
+      const [tenantsRes, networksRes] = await Promise.all([
+        fetch("/api/admin/tenants", { cache: "no-store" }),
+        fetch("/api/admin/networks", { cache: "no-store" }),
+      ]);
+
+      const tenantsData = await tenantsRes.json();
+      if (!tenantsRes.ok) {
+        throw new Error(tenantsData?.error ?? "No se pudieron cargar las cuentas");
+      }
+      setTenants(tenantsData.tenants ?? []);
+
+      const networksData = await networksRes.json();
+      if (!networksRes.ok) {
+        throw new Error(networksData?.error ?? "No se pudieron cargar tus redes de Meta");
+      }
+      setNetworks({
+        connected: Boolean(networksData.connected),
+        facebook: networksData.facebook ?? null,
+        pages: networksData.pages ?? [],
+        instagram: networksData.instagram ?? [],
+        warnings: networksData.warnings ?? [],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
@@ -104,6 +330,9 @@ export default function AdminPage() {
     }
   }, [status, session?.user?.role, load]);
 
+  const selectionCount = (selection: Selection) =>
+    selection.pageIds.length + selection.instagramIds.length;
+
   async function createTenant(event: React.FormEvent) {
     event.preventDefault();
     setBusy("create");
@@ -113,12 +342,80 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/tenants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newTenant),
+        body: JSON.stringify({
+          ...newTenant,
+          pageIds: newSelection.pageIds,
+          instagramIds: newSelection.instagramIds,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "No se pudo crear la cuenta");
-      setNewTenant({ name: "", email: "", password: "", fbAppId: "", fbAppSecret: "" });
-      setNotice(`Cuenta "${data.tenant?.name}" creada`);
+      setNewTenant({ name: "", email: "", password: "" });
+      setNewSelection(EMPTY_SELECTION);
+
+      const imported = data.imported as { imported: number; warnings: string[] } | null;
+      const parts = [`Cuenta "${data.tenant?.name}" creada`];
+      if (imported?.imported) parts.push(`${imported.imported} red(es) asignada(s)`);
+      if (imported?.warnings?.length) parts.push(imported.warnings.join(" "));
+      if (data.warning) parts.push(data.warning);
+      setNotice(parts.join(" · "));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function importNetworksFor(tenant: AdminTenant) {
+    if (!selectionCount(importSelection)) {
+      setError("Elegí al menos una red social para vincular");
+      return;
+    }
+
+    setBusy(`import-${tenant.id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/networks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: tenant.id, ...importSelection }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "No se pudieron vincular las redes");
+
+      const parts = [
+        `${data.imported?.length ?? 0} red(es) vinculada(s) a "${tenant.name}" para ${
+          data.grantedTo ?? 0
+        } usuario(s)`,
+      ];
+      if (data.warnings?.length) parts.push(data.warnings.join(" "));
+      setNotice(parts.join(" · "));
+      setImportFor(null);
+      setImportSelection(EMPTY_SELECTION);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveUserAccess(user: AdminUser) {
+    setBusy(`access-${user.id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ socialProfileIds: accessDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "No se pudieron guardar las redes");
+      setAccessFor(null);
+      setNotice(`Redes de ${user.email}: ${data.grants ?? 0} asignada(s)`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado");
@@ -212,8 +509,8 @@ export default function AdminPage() {
             Administración
           </h1>
           <p className="page-subtitle">
-            Creá las cuentas de tus clientes, cargá el App ID/Secret de su app de Facebook y
-            entregales su usuario.
+            Conectá tus Páginas y cuentas de Instagram desde tu cuenta de Facebook, y después
+            asigná cuáles administra cada cliente.
           </p>
         </div>
         <button className="btn btn-secondary" onClick={() => void load()} disabled={loading}>
@@ -237,10 +534,65 @@ export default function AdminPage() {
       )}
 
       <div className="card" style={{ marginBottom: "1.5rem" }}>
+        <h2 style={{ marginTop: 0, fontSize: "1rem" }}>
+          <Globe size={16} color="#1877f2" style={{ verticalAlign: "-3px", marginRight: 6 }} />
+          Mis redes de Meta
+        </h2>
+        {networks?.connected ? (
+          <>
+            <p style={{ margin: "0 0 0.25rem", fontSize: "0.9rem" }}>
+              Conectado como <strong>{networks.facebook?.fbUserName ?? "tu cuenta"}</strong>
+            </p>
+            <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
+              {networks.facebook?.tokenExpiresAt
+                ? `El token vence el ${new Date(networks.facebook.tokenExpiresAt).toLocaleDateString("es-AR")}.`
+                : "Token de Facebook activo."}{" "}
+              {networks.pages.length} Página(s) y {networks.instagram.length} cuenta(s) de Instagram
+              disponibles.
+            </p>
+            {networks.warnings.length > 0 && (
+              <ul
+                style={{
+                  margin: "0.6rem 0 0",
+                  paddingLeft: "1.1rem",
+                  color: "#f59e0b",
+                  fontSize: "0.8rem",
+                }}
+              >
+                {networks.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : (
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            Todavía no conectaste tu cuenta. Conectala para ver tus Páginas e importarlas a las
+            cuentas de tus clientes.
+          </p>
+        )}
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.85rem" }}>
+          <a
+            className="btn btn-primary"
+            href="/api/connect/facebook/start?next=/admin"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            <Globe size={16} />
+            {networks?.connected ? "Reconectar Facebook" : "Conectar mi Facebook"}
+          </a>
+          <button className="btn btn-secondary" onClick={() => void load()} disabled={loading}>
+            {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            Actualizar redes
+          </button>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: "1.5rem" }}>
         <h2 style={{ marginTop: 0, fontSize: "1rem" }}>Redirect URI para las apps de Meta</h2>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-          Cada cliente debe agregar esta URL en <strong>Facebook Login → Configuración</strong> de su
-          propia app.
+          Esta URL tiene que estar cargada en <strong>Facebook Login → Configuración</strong> de tu
+          app de Meta. Sólo necesitás App ID/Secret propios por cliente si preferís que cada uno
+          conecte con su app (si no, se usa la de las variables de entorno).
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           <code
@@ -300,24 +652,40 @@ export default function AdminPage() {
                 required
               />
             </Field>
-            <Field label="App ID de Facebook (opcional)">
+            <Field label="Contraseña inicial">
               <input
                 style={inputStyle}
-                value={newTenant.fbAppId}
-                onChange={(e) => setNewTenant({ ...newTenant, fbAppId: e.target.value })}
-                placeholder="123456789012345"
-              />
-            </Field>
-            <Field label="App Secret (opcional)">
-              <input
-                style={inputStyle}
-                type="password"
-                value={newTenant.fbAppSecret}
-                onChange={(e) => setNewTenant({ ...newTenant, fbAppSecret: e.target.value })}
-                placeholder="se guarda cifrado"
+                type="text"
+                value={newTenant.password}
+                onChange={(e) => setNewTenant({ ...newTenant, password: e.target.value })}
+                placeholder="mínimo 8 caracteres"
+                required
               />
             </Field>
           </div>
+
+          <div
+            style={{
+              borderTop: "1px solid var(--border-color)",
+              margin: "0.25rem 0 0.85rem",
+              paddingTop: "0.85rem",
+            }}
+          >
+            <label style={labelStyle}>
+              Redes que va a administrar (opcional · {selectionCount(newSelection)} elegida(s))
+            </label>
+            <p style={{ margin: "0 0 0.6rem", color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+              Se vinculan con tu cuenta de Facebook y quedan disponibles para este cliente. Si no
+              elegís ninguna ahora, podés asignarlas después desde la tarjeta de la cuenta.
+            </p>
+            <NetworkPicker
+              networks={networks}
+              selection={newSelection}
+              onChange={setNewSelection}
+              loading={loading && networks === null}
+            />
+          </div>
+
           <button className="btn btn-primary" type="submit" disabled={busy === "create"}>
             {busy === "create" ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
             Crear cuenta
@@ -362,21 +730,46 @@ export default function AdminPage() {
                   {tenant.users.map((u) => u.email).join(", ") || "sin usuarios"}
                 </p>
                 <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
-                  {tenant.profilesCount} páginas · {tenant.postsCount} publicaciones ·{" "}
+                  {tenant.profilesCount} redes · {tenant.postsCount} publicaciones ·{" "}
                   {tenant.facebook?.fbUserName
-                    ? `Facebook: ${tenant.facebook.fbUserName}`
-                    : "Facebook sin conectar"}
+                    ? `Conectado por cliente: ${tenant.facebook.fbUserName}`
+                    : "sin conexión propia del cliente"}
                 </p>
+                {tenant.profiles.length > 0 && (
+                  <p style={{ margin: "0.35rem 0 0", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                    {tenant.profiles
+                      .map(
+                        (profile) =>
+                          `${
+                            profile.platform === INSTAGRAM_PLATFORM ? "@" : ""
+                          }${profile.username ?? profile.profileId}`,
+                      )
+                      .join(" · ")}
+                  </p>
+                )}
               </div>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 <button
                   className="btn btn-secondary"
                   onClick={() => {
-                    setCredentialsFor(credentialsFor === tenant.id ? null : tenant.id);
-                    setCreds({ fbAppId: tenant.fbAppId ?? "", fbAppSecret: "" });
+                    const next = importFor === tenant.id ? null : tenant.id;
+                    setImportFor(next);
+                    setImportSelection(EMPTY_SELECTION);
+                    setCredentialsFor(null);
                   }}
                 >
-                  {tenant.hasAppSecret ? "Credenciales" : "Cargar credenciales"}
+                  <Link2 size={16} /> {tenant.profilesCount ? "Sumar redes" : "Vincular redes"}
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setCredentialsFor(credentialsFor === tenant.id ? null : tenant.id);
+                    setCreds({ fbAppId: tenant.fbAppId ?? "", fbAppSecret: "" });
+                    setImportFor(null);
+                  }}
+                  title="Sólo si este cliente usa su propia app de Meta"
+                >
+                  {tenant.hasAppSecret ? "Credenciales propias" : "App propia"}
                 </button>
                 <button
                   className="btn btn-secondary"
@@ -389,17 +782,187 @@ export default function AdminPage() {
               </div>
             </div>
 
+            {tenant.users.length > 0 && (
+              <div
+                style={{
+                  marginTop: "0.85rem",
+                  display: "grid",
+                  gap: "0.4rem",
+                }}
+              >
+                {tenant.users.map((user) => {
+                  const isEditing = accessFor === user.id;
+                  const assigned = user.socialProfileIds
+                    .map((id) => tenant.profiles.find((profile) => profile.id === id))
+                    .filter((profile): profile is AdminProfile => Boolean(profile));
+
+                  return (
+                    <div
+                      key={user.id}
+                      style={{
+                        padding: "0.6rem 0.75rem",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-color)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: "0.75rem",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <span style={{ fontSize: "0.88rem" }}>{user.email}</span>
+                          <span
+                            style={{
+                              marginLeft: 8,
+                              fontSize: "0.72rem",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            {user.role === "ADMIN" ? "admin" : "cliente"}
+                          </span>
+                          <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                            {assigned.length
+                              ? assigned
+                                  .map((profile) =>
+                                    profile.platform === INSTAGRAM_PLATFORM
+                                      ? `IG @${profile.username ?? profile.profileId}`
+                                      : profile.username ?? profile.profileId,
+                                  )
+                                  .join(" · ")
+                              : "sin redes asignadas"}
+                          </div>
+                        </div>
+                        <button
+                          className="btn btn-secondary"
+                          disabled={tenant.profiles.length === 0}
+                          title={
+                            tenant.profiles.length === 0
+                              ? "Primero vinculá redes a esta cuenta"
+                              : "Elegir redes de este usuario"
+                          }
+                          onClick={() => {
+                            if (isEditing) {
+                              setAccessFor(null);
+                              return;
+                            }
+                            setAccessFor(user.id);
+                            setAccessDraft(user.socialProfileIds);
+                          }}
+                        >
+                          {isEditing ? "Cancelar" : "Asignar redes"}
+                        </button>
+                      </div>
+
+                      {isEditing && (
+                        <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.4rem" }}>
+                          {tenant.profiles.map((profile) => (
+                            <CheckRow
+                              key={profile.id}
+                              checked={accessDraft.includes(profile.id)}
+                              onChange={() => setAccessDraft(toggleId(accessDraft, profile.id))}
+                              icon={
+                                profile.platform === INSTAGRAM_PLATFORM ? (
+                                  <Camera size={16} color="#e1306c" />
+                                ) : (
+                                  <Globe size={16} color="#1877f2" />
+                                )
+                              }
+                              title={
+                                profile.platform === INSTAGRAM_PLATFORM
+                                  ? `@${profile.username ?? profile.profileId}`
+                                  : (profile.username ?? profile.profileId)
+                              }
+                              subtitle={
+                                profile.platform === INSTAGRAM_PLATFORM ? "Instagram" : "Página"
+                              }
+                            />
+                          ))}
+                          <div style={{ display: "flex", gap: "0.5rem" }}>
+                            <button
+                              className="btn btn-primary"
+                              onClick={() => void saveUserAccess(user)}
+                              disabled={busy === `access-${user.id}`}
+                            >
+                              {busy === `access-${user.id}` ? (
+                                <Loader2 className="spin" size={16} />
+                              ) : null}
+                              Guardar redes
+                            </button>
+                            <button className="btn btn-secondary" onClick={() => setAccessFor(null)}>
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {importFor === tenant.id && (
+              <div
+                style={{
+                  marginTop: "1rem",
+                  paddingTop: "1rem",
+                  borderTop: "1px solid var(--border-color)",
+                }}
+              >
+                <label style={labelStyle}>
+                  Redes a vincular ({selectionCount(importSelection)} elegida(s)) — se asignan a
+                  todos los usuarios de la cuenta
+                </label>
+                <NetworkPicker
+                  networks={networks}
+                  selection={importSelection}
+                  onChange={setImportSelection}
+                  loading={loading && networks === null}
+                />
+                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.85rem" }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => void importNetworksFor(tenant)}
+                    disabled={busy === `import-${tenant.id}`}
+                  >
+                    {busy === `import-${tenant.id}` ? (
+                      <Loader2 className="spin" size={16} />
+                    ) : (
+                      <Link2 size={16} />
+                    )}
+                    Vincular y asignar
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => setImportFor(null)}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
             {credentialsFor === tenant.id && (
               <div
                 style={{
                   marginTop: "1rem",
                   paddingTop: "1rem",
                   borderTop: "1px solid var(--border-color)",
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
-                  gap: "0 1rem",
                 }}
               >
+                <p style={{ margin: "0 0 0.75rem", color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+                  Opcional: sólo si este cliente va a conectar sus redes con su propia app de Meta.
+                  Si no, usá «Vincular redes» con tu cuenta de developers.
+                </p>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+                    gap: "0 1rem",
+                  }}
+                >
                 <Field label="App ID de Facebook">
                   <input
                     style={inputStyle}
@@ -429,6 +992,7 @@ export default function AdminPage() {
                   <button className="btn btn-secondary" onClick={() => setCredentialsFor(null)}>
                     Cancelar
                   </button>
+                </div>
                 </div>
               </div>
             )}

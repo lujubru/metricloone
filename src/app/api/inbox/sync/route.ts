@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileIds, requireTenant, serverError } from "@/lib/api";
 import { syncTenantInbox } from "@/lib/inbox";
-import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -16,15 +15,15 @@ export async function POST() {
   const { tenantId } = auth;
 
   try {
-    const profiles = await prisma.socialProfile.count({ where: { tenantId } });
-    if (!profiles) {
+    const profileIds = await accessibleProfileIds(auth);
+    if (!profileIds.length) {
       return NextResponse.json(
         { error: "Todavía no hay ninguna red vinculada." },
         { status: 400 }
       );
     }
 
-    const summary = await syncTenantInbox(tenantId);
+    const summary = await syncTenantInbox(tenantId, profileIds);
     return NextResponse.json(summary);
   } catch (error) {
     console.error("Error al sincronizar el inbox:", error);

@@ -506,11 +506,14 @@ function missingRequiredFields(rejected: string[], required: string[]): string[]
 }
 
 /**
- * Trae comentarios y mensajes de todas las cuentas conectadas del tenant.
- * Cada fuente falla de forma independiente: un permiso faltante se informa como
- * advertencia en lugar de romper la sincronización completa.
+ * Trae comentarios y mensajes de las cuentas conectadas del tenant (o sólo de
+ * los perfiles indicados). Cada fuente falla de forma independiente: un permiso
+ * faltante se informa como advertencia en lugar de romper la sincronización.
  */
-export async function syncTenantInbox(tenantId: string): Promise<InboxSyncSummary> {
+export async function syncTenantInbox(
+  tenantId: string,
+  profileIds?: string[],
+): Promise<InboxSyncSummary> {
   const summary: InboxSyncSummary = {
     threads: 0,
     imported: 0,
@@ -520,7 +523,7 @@ export async function syncTenantInbox(tenantId: string): Promise<InboxSyncSummar
   };
 
   const profiles = await prisma.socialProfile.findMany({
-    where: { tenantId },
+    where: { tenantId, ...(profileIds ? { id: { in: profileIds } } : {}) },
     select: {
       id: true,
       tenantId: true,

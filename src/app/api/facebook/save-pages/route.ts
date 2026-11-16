@@ -3,6 +3,7 @@ import { badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { listManagedPages } from "@/lib/facebook";
 import { subscribePageWebhooks } from "@/lib/inbox";
+import { grantProfileAccess } from "@/lib/networks";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +72,9 @@ export async function POST(req: Request) {
         },
       });
       savedProfiles.push(profile);
+
+      // Quien conecta la red la puede administrar sin esperar al administrador.
+      await grantProfileAccess([profile.id], [auth.user.id]);
 
       try {
         const result = await subscribePageWebhooks(page.id, page.access_token);

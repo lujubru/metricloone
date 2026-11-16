@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, requireTenant, serverError } from "@/lib/api";
 import { graphRequest } from "@/lib/facebook";
 import {
   FACEBOOK_PLATFORM,
   INSTAGRAM_WEBHOOK_FIELDS,
   PAGE_WEBHOOK_FIELDS,
 } from "@/lib/inbox";
+import { resolveAppCredentials } from "@/lib/facebook-oauth";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export async function GET(req: Request) {
   try {
     const [profiles, tenant] = await Promise.all([
       prisma.socialProfile.findMany({
-        where: { tenantId },
+        where: accessibleProfileWhere(auth),
         select: {
           id: true,
           platform: true,
@@ -38,7 +39,10 @@ export async function GET(req: Request) {
         },
         orderBy: { platform: "asc" },
       }),
-      prisma.tenant.findUnique({ where: { id: tenantId }, select: { fbAppId: true } }),
+      prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { fbAppId: true, fbAppSecret: true },
+      }),
     ]);
 
     const baseUrl = (process.env.NEXTAUTH_URL || new URL(req.url).origin).replace(/\/$/, "");
@@ -87,7 +91,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       callbackUrl: `${baseUrl}/api/webhooks/meta`,
       verifyTokenConfigured: Boolean(process.env.META_WEBHOOK_VERIFY_TOKEN),
-      appId: tenant?.fbAppId ?? null,
+      appId: resolveAppCredentials(tenant)?.appId ?? null,
       webhookFields: { pages: PAGE_WEBHOOK_FIELDS, instagram: INSTAGRAM_WEBHOOK_FIELDS },
       accounts,
     });

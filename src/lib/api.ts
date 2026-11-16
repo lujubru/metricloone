@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth";
+import { prisma } from "./prisma";
 
 export type SessionUser = {
   id: string;
@@ -72,4 +74,26 @@ export async function requireAdmin(): Promise<TenantAuth | { response: NextRespo
     return { response: forbidden("El administrador no tiene una cuenta asignada.") };
   }
   return { user, tenantId: user.tenantId };
+}
+
+/**
+ * Filtro de perfiles sociales que el usuario puede administrar: el ADMIN ve
+ * todas las redes de su cuenta y el CLIENT sólo las que tiene asignadas.
+ */
+export function accessibleProfileWhere(auth: TenantAuth): Prisma.SocialProfileWhereInput {
+  if (auth.user.role === ADMIN_ROLE) return { tenantId: auth.tenantId };
+
+  return {
+    tenantId: auth.tenantId,
+    access: { some: { userId: auth.user.id } },
+  };
+}
+
+/** Ids de los perfiles accesibles, para filtrar por relaciones (posts, inbox). */
+export async function accessibleProfileIds(auth: TenantAuth): Promise<string[]> {
+  const profiles = await prisma.socialProfile.findMany({
+    where: accessibleProfileWhere(auth),
+    select: { id: true },
+  });
+  return profiles.map((profile) => profile.id);
 }

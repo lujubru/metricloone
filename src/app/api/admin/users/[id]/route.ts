@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { badRequest, forbidden, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { syncProfileAccess } from "@/lib/networks";
 
 export const dynamic = "force-dynamic";
 
@@ -54,10 +55,33 @@ export async function PATCH(req: Request, { params }: Params) {
     const updated = await prisma.user.update({
       where: { id },
       data,
-      select: { id: true, name: true, email: true, role: true, tenantId: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        tenantId: true,
+        profileAccess: { select: { socialProfileId: true } },
+      },
     });
 
-    return NextResponse.json({ success: true, user: updated });
+    const grants = Array.isArray(body?.socialProfileIds)
+      ? await syncProfileAccess({
+          userId: id,
+          tenantId: user.tenantId ?? auth.tenantId,
+          socialProfileIds: body.socialProfileIds.filter(
+            (item: unknown): item is string => typeof item === "string",
+          ),
+        })
+      : null;
+
+    const { profileAccess, ...rest } = updated;
+
+    return NextResponse.json({
+      success: true,
+      user: { ...rest, socialProfileIds: profileAccess.map((access) => access.socialProfileId) },
+      grants,
+    });
   } catch (error) {
     console.error("Error al actualizar el usuario:", error);
     return serverError();

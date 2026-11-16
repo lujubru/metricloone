@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export async function GET() {
     if ("response" in auth) return auth.response;
 
     const profiles = await prisma.socialProfile.findMany({
-      where: { tenantId: auth.tenantId },
+      where: accessibleProfileWhere(auth),
       orderBy: { createdAt: "desc" },
     });
 

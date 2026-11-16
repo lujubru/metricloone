@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { FacebookApiError } from "@/lib/facebook";
 import { listInstagramAccounts } from "@/lib/instagram";
@@ -20,7 +20,7 @@ export async function GET() {
     }
 
     const pages = await prisma.socialProfile.findMany({
-      where: { tenantId: auth.tenantId, platform: "facebook_page" },
+      where: { ...accessibleProfileWhere(auth), platform: "facebook_page" },
       select: { profileId: true },
     });
 

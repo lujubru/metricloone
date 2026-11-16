@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { badRequest, requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { validatePostPayload } from "@/lib/post-validation";
 
@@ -11,7 +11,7 @@ export async function GET() {
     if ("response" in auth) return auth.response;
 
     const posts = await prisma.post.findMany({
-      where: { tenantId: auth.tenantId },
+      where: { tenantId: auth.tenantId, socialProfile: { is: accessibleProfileWhere(auth) } },
       include: { socialProfile: true },
       orderBy: { scheduledFor: "asc" },
     });
@@ -39,9 +39,9 @@ export async function POST(req: Request) {
       return badRequest("La fecha de programación es inválida");
     }
 
-    // El perfil tiene que pertenecer a la cuenta del usuario.
+    // El perfil tiene que pertenecer a la cuenta y estar asignado al usuario.
     const profile = await prisma.socialProfile.findFirst({
-      where: { id: socialProfileId, tenantId: auth.tenantId },
+      where: { id: socialProfileId, ...accessibleProfileWhere(auth) },
     });
 
     if (!profile) {

@@ -1,16 +1,31 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { decryptSecret } from "@/lib/crypto";
 import { exchangeCodeForToken, exchangeForLongLivedToken, getFacebookUser } from "@/lib/facebook";
-import { FB_STATE_COOKIE, facebookCallbackUrl } from "@/lib/facebook-oauth";
+import {
+  FB_STATE_COOKIE,
+  facebookCallbackUrl,
+  normalizeReturnPath,
+  resolveAppCredentials,
+} from "@/lib/facebook-oauth";
 
 export const dynamic = "force-dynamic";
 
-function fail(request: Request, reason: string) {
-  const url = new URL("/connections", request.url);
-  url.searchParams.set("error", reason);
+function redirectBack(
+  request: Request,
+  path: string,
+  params: Record<string, string>,
+  extra?: Record<string, string>,
+) {
+  const url = new URL(path, request.url);
+  for (const [key, value] of Object.entries({ ...params, ...extra })) {
+    url.searchParams.set(key, value);
+  }
   return NextResponse.redirect(url);
+}
+
+function fail(request: Request, reason: string, path = "/connections") {
+  return redirectBack(request, path, { error: reason });
 }
 
 /** Callback del OAuth: guarda el token de usuario del tenant que lo inició. */
@@ -21,30 +36,31 @@ export async function GET(request: Request) {
 
   if (!code || !state) return fail(request, "oauth_cancelado");
 
-  let payload: { tenantId?: string; nonce?: string };
+  let payload: { tenantId?: string; nonce?: string; next?: string };
   try {
     payload = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
   } catch {
     return fail(request, "state_invalido");
   }
 
+  const returnPath = normalizeReturnPath(payload.next);
+
   const store = await cookies();
   const expectedNonce = store.get(FB_STATE_COOKIE)?.value;
   store.delete(FB_STATE_COOKIE);
 
   if (!payload.tenantId || !payload.nonce || payload.nonce !== expectedNonce) {
-    return fail(request, "state_invalido");
+    return fail(request, "state_invalido", returnPath);
   }
 
   const tenant = await prisma.tenant.findUnique({ where: { id: payload.tenantId } });
-  if (!tenant?.fbAppId || !tenant.fbAppSecret) return fail(request, "credenciales");
-
-  const appSecret = decryptSecret(tenant.fbAppSecret);
+  const credentials = resolveAppCredentials(tenant);
+  if (!tenant || !credentials) return fail(request, "credenciales", returnPath);
 
   try {
     const shortLived = await exchangeCodeForToken({
-      appId: tenant.fbAppId,
-      appSecret,
+      appId: credentials.appId,
+      appSecret: credentials.appSecret,
       redirectUri: facebookCallbackUrl(request),
       code,
     });
@@ -54,8 +70,8 @@ export async function GET(request: Request) {
 
     try {
       const longLived = await exchangeForLongLivedToken({
-        appId: tenant.fbAppId,
-        appSecret,
+        appId: credentials.appId,
+        appSecret: credentials.appSecret,
         accessToken,
       });
       accessToken = longLived.access_token;
@@ -85,11 +101,9 @@ export async function GET(request: Request) {
       },
     });
 
-    const ok = new URL("/connections", request.url);
-    ok.searchParams.set("connected", "facebook");
-    return NextResponse.redirect(ok);
+    return redirectBack(request, returnPath, { connected: "facebook" });
   } catch (error) {
     console.error("Error conectando Facebook:", error);
-    return fail(request, "exchange");
+    return fail(request, "exchange", returnPath);
   }
 }

@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { badRequest, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { syncProfileAccess } from "@/lib/networks";
 
 export const dynamic = "force-dynamic";
 
 const SALT_ROUNDS = 10;
 
-/** Lista de usuarios de todas las cuentas. */
+/** Lista de usuarios de todas las cuentas con las redes que administran. */
 export async function GET(req: Request) {
   try {
     const auth = await requireAdmin();
@@ -25,10 +26,16 @@ export async function GET(req: Request) {
         role: true,
         tenantId: true,
         tenant: { select: { name: true } },
+        profileAccess: { select: { socialProfileId: true } },
       },
     });
 
-    return NextResponse.json({ users });
+    return NextResponse.json({
+      users: users.map(({ profileAccess, ...user }) => ({
+        ...user,
+        socialProfileIds: profileAccess.map((access) => access.socialProfileId),
+      })),
+    });
   } catch (error) {
     console.error("Error al listar los usuarios:", error);
     return serverError();
@@ -70,7 +77,14 @@ export async function POST(req: Request) {
       select: { id: true, name: true, email: true, role: true, tenantId: true },
     });
 
-    return NextResponse.json({ success: true, user }, { status: 201 });
+    const socialProfileIds = Array.isArray(body?.socialProfileIds)
+      ? body.socialProfileIds.filter((item: unknown): item is string => typeof item === "string")
+      : null;
+    const grants = socialProfileIds
+      ? await syncProfileAccess({ userId: user.id, tenantId, socialProfileIds })
+      : 0;
+
+    return NextResponse.json({ success: true, user, grants }, { status: 201 });
   } catch (error) {
     console.error("Error al crear el usuario:", error);
     return serverError();

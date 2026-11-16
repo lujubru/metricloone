@@ -16,7 +16,7 @@ type TenantStatus = {
 const ERROR_MESSAGES: Record<string, string> = {
   tenant: 'Tu cuenta no tiene un espacio asignado. Contactá al administrador.',
   credentials:
-    'Todavía no se cargaron las credenciales de tu app de Facebook. Pedíselas al administrador.',
+    'No hay una app de Meta configurada para conectar redes. Pedile al administrador que vincule tus redes.',
   oauth_cancelado: 'Cancelaste la autorización en Facebook.',
   state_invalido: 'La autorización expiró o no es válida. Volvé a intentarlo.',
   credenciales: 'Las credenciales de la app de Facebook son incorrectas. Avisá al administrador.',
@@ -229,7 +229,7 @@ function ConnectionsContent() {
       setManualBanner({
         type: 'error',
         message:
-          'Tu cuenta todavía no tiene el App ID y App Secret de Facebook. Pedíselos al administrador antes de conectar.',
+          'No hay una app de Meta configurada todavía. Pedile al administrador que vincule tus redes.',
       });
       return;
     }
@@ -334,8 +334,8 @@ function ConnectionsContent() {
             color: '#fbbf24',
           }}
         >
-          El administrador todavía no cargó el App ID / App Secret de tu app de Facebook, por eso no
-          podés conectar redes.
+          El administrador todavía no configuró la conexión con Meta. Pedile que vincule tus redes
+          desde el panel de administración.
         </div>
       )}
 

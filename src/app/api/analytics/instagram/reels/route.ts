@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, requireTenant, serverError } from "@/lib/api";
 import { FacebookApiError } from "@/lib/facebook";
 import { getInstagramReelInsights, INSTAGRAM_PLATFORM } from "@/lib/instagram";
 import { isVideoUrl } from "@/lib/media";
@@ -35,7 +35,7 @@ export async function GET() {
           postType: "POST",
           publishedAt: { not: null },
           facebookPostId: { not: null },
-          socialProfile: { platform: INSTAGRAM_PLATFORM },
+          socialProfile: { is: { ...accessibleProfileWhere(auth), platform: INSTAGRAM_PLATFORM } },
         },
         select: {
           id: true,

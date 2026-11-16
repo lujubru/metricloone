@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { badRequest, requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileIds, badRequest, requireTenant, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ export async function GET(_req: Request, context: Context) {
 
   try {
     const thread = await prisma.inboxThread.findFirst({
-      where: { id, tenantId },
+      where: { id, tenantId, socialProfileId: { in: await accessibleProfileIds(auth) } },
       include: {
         socialProfile: { select: { id: true, platform: true, username: true, profileId: true } },
         messages: { orderBy: { remoteCreatedAt: "asc" } },
@@ -69,7 +69,10 @@ export async function PATCH(req: Request, context: Context) {
   }
 
   try {
-    const thread = await prisma.inboxThread.findFirst({ where: { id, tenantId }, select: { id: true } });
+    const thread = await prisma.inboxThread.findFirst({
+      where: { id, tenantId, socialProfileId: { in: await accessibleProfileIds(auth) } },
+      select: { id: true },
+    });
     if (!thread) return NextResponse.json({ error: "Conversación no encontrada" }, { status: 404 });
 
     await prisma.inboxMessage.updateMany({ where: { threadId: id }, data: { isRead } });
@@ -88,7 +91,9 @@ export async function DELETE(_req: Request, context: Context) {
   const { id } = await context.params;
 
   try {
-    const result = await prisma.inboxThread.deleteMany({ where: { id, tenantId } });
+    const result = await prisma.inboxThread.deleteMany({
+      where: { id, tenantId, socialProfileId: { in: await accessibleProfileIds(auth) } },
+    });
     if (!result.count) return badRequest("La conversación no existe");
     return NextResponse.json({ ok: true });
   } catch (error) {
