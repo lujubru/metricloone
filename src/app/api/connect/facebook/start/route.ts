@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { requireTenant } from "@/lib/api";
+import { requireAdmin } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { randomToken } from "@/lib/crypto";
 import { buildOAuthDialogUrl } from "@/lib/facebook";
@@ -19,8 +19,9 @@ export const dynamic = "force-dynamic";
  * `?next=/admin` vuelve al panel de administración en lugar de /connections.
  */
 export async function GET(request: Request) {
-  const auth = await requireTenant();
-  if ("response" in auth) return auth.response;
+  const auth = await requireAdmin();
+  // Conectar redes es tarea del ADMIN: un cliente vuelve al panel sin ruido.
+  if ("response" in auth) return NextResponse.redirect(new URL("/", request.url));
 
   const tenant = await prisma.tenant.findUnique({ where: { id: auth.tenantId } });
   if (!tenant) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenant, serverError } from "@/lib/api";
+import { requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { grantedPermissions, listManagedPages } from "@/lib/facebook";
 
@@ -13,7 +13,7 @@ const REQUIRED_PERMISSIONS = [
 
 export async function GET() {
   try {
-    const auth = await requireTenant();
+    const auth = await requireAdmin();
     if ("response" in auth) return auth.response;
 
     // Token de usuario de la cuenta: se guarda al conectar Facebook.

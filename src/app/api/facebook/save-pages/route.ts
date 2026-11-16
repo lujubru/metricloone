@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { badRequest, requireTenant, serverError } from "@/lib/api";
+import { badRequest, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { listManagedPages } from "@/lib/facebook";
 import { subscribePageWebhooks } from "@/lib/inbox";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const auth = await requireTenant();
+    const auth = await requireAdmin();
     if ("response" in auth) return auth.response;
 
     const body = await req.json();

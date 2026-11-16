@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { accessibleProfileWhere, requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { FacebookApiError } from "@/lib/facebook";
 import { listInstagramAccounts } from "@/lib/instagram";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 /** Cuentas de Instagram vinculadas a las Páginas de Facebook ya conectadas. */
 export async function GET() {
   try {
-    const auth = await requireTenant();
+    const auth = await requireAdmin();
     if ("response" in auth) return auth.response;
 
     const connection = await prisma.fbConnection.findUnique({

@@ -294,4 +294,42 @@ npm run build              # OK
 
 - ⚠️ Dos cuentas que compartan la **misma Página** compartirían el inbox de esa red, porque el perfil es único. Con este modelo no ocurre: cada cliente tiene sus propias Páginas dentro del pool.
 - ⚠️ El token es siempre el del ADMIN: si vence o se revoca, todas las cuentas dejan de publicar. Se renueva desde *Reconectar* en `/admin` o `/connections`.
-- ⏳ Verificación funcional end-to-end (conectar desde `/admin`, crear un cliente, comprobar que sólo ve las redes asignadas en `/connections`, `/planning`, `/posts` e `/inbox`, y publicar) queda a cargo del usuario con cuentas reales de Meta.
+- ⏳ Verificación funcional end-to-end (conectar desde `/admin`, crear un cliente, comprobar que sólo ve las redes asignadas y que no entra a `/connections`, `/settings`, `/smartlink` ni `/admin`, y publicar) queda a cargo del usuario con cuentas reales de Meta.
+
+## 13. Pantallas de configuración reservadas al ADMIN
+
+### 13.1 Pedido
+
+> "los usuarios que cree el admin no tienen que tener acceso a SmartLink, Connections, Settings para evitar manipulaciones o errores"
+
+El cliente tiene que poder trabajar (Overview, Reels, Planning, Inbox) pero no tocar nada de configuración: vincular/desconectar redes, reimportar Páginas, cambiar credenciales o perder accesos por error.
+
+### 13.2 Decisión
+
+Bloquear en **tres capas** para no depender de que el menú alcance:
+
+1. **Menú** (`src/components/Sidebar.tsx`): los ítems base son Analytics, Reels, Planning e Inbox; `adminItems` (SmartLink, Connections, Settings, Admin) se concatena sólo si `session.user.role === "ADMIN"`. El `useSession()` ya estaba en el componente.
+2. **Navegación** (`src/proxy.ts`, el antiguo `middleware.ts` de Next 16): se agregó `ADMIN_ONLY_PATHS = ["/admin", "/smartlink", "/connections", "/settings"]` y `isAdminOnlyPath()`; si hay token y `token.role !== "ADMIN"` la respuesta es `NextResponse.redirect(new URL("/", request.url))`. El guard de sesión previo (sin token → `/login?callbackUrl=...`) queda igual y el `matcher` existente ya cubre todas las páginas (excluye `/api`, `_next` y assets).
+3. **API**: los endpoints que crean o modifican conexiones pasaron de `requireTenant()` a `requireAdmin()` (responde `403` con `forbidden()`):
+   - `/api/facebook/pages` (GET) y `/api/facebook/save-pages` (POST).
+   - `/api/instagram/accounts` (GET) y `/api/instagram/save-accounts` (POST).
+   - `/api/connect/facebook/start` (GET): al ser una navegación del navegador no devuelve JSON, redirige a `/`. El `callback` no valida sesión (viene de Meta), pero queda inalcanzable porque `start` es el que arma el `state` y la cookie `FB_STATE_COOKIE`.
+
+`DELETE /api/profiles/[id]` ya exigía ADMIN antes de este cambio, así que el cliente nunca pudo desconectar perfiles.
+
+### 13.3 Detalle de UI
+
+- `NewPostModal` mostraba "Andá a Conexiones e importá una Página…" cuando el usuario no tenía perfiles; ahora el aviso es neutro ("Las cuentas se administran desde el panel de administración; si necesitás publicar en una red, pedile al administrador que te la asigne"). `data-deletion/page.tsx` sigue mencionando Ajustes: es una página pública de instrucciones para Meta, no una pantalla del cliente.
+
+### 13.4 Validación ejecutada
+
+```bash
+npx tsc --noEmit   # OK
+npm run lint       # OK (queda el warning preexistente de layout.tsx)
+npm run build      # OK
+```
+
+### 13.5 Riesgos
+
+- ⚠️ El `proxy` decide por el `role` del JWT, que se fija al iniciar sesión: si se cambia el rol de un usuario, hay que volver a loguearse para que el redirect aplique (la API, en cambio, lo lee de la base en cada request).
+- ⚠️ Ocultar pantallas no reemplaza al `requireAdmin()`: cualquier endpoint nuevo para estas secciones tiene que usarlo explícitamente.

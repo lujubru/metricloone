@@ -32,11 +32,24 @@ Flujo de uso en producción:
 | `/admin` | OK | Sólo `ADMIN`: conecta sus redes de Meta, crea cuentas (tenants) eligiendo qué redes del pool administra cada una y ajusta los permisos por usuario. Las credenciales de Meta por cuenta quedaron como opción avanzada. |
 | `/` Overview | OK | Contadores de cuentas conectadas, posts totales, programados y publicados, más el listado de perfiles conectados. |
 | `/reels` | OK | Retención de los últimos 20 Reels publicados desde la app: tiempo promedio de reproducción, porcentaje de omisión en los primeros 3 segundos y reproducciones. |
-| `/connections` | OK | Conexión OAuth con Meta, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas. El cliente ve sólo las redes que el ADMIN le asignó. |
+| `/connections` | OK | Sólo `ADMIN`: conexión OAuth con Meta, selección de Páginas de Facebook e importación de las cuentas de Instagram Business vinculadas a esas Páginas, todas al pool de la cuenta. |
 | `/planning` | OK | Calendario/listado de publicaciones con creación, edición y borrado. Permite **subir imágenes y videos** (varios por publicación) y elegir entre **Publicación** o **Historia**. Vistas **Día / Semana / Mes** reales, filtros por perfil, red, tipo y estado, navegación de período y el botón **Nuevo post** del topbar habilitado. Muestra miniaturas, el tipo, el estado (`DRAFT`, `SCHEDULED`, `PUBLISHING`, `PUBLISHED`, `FAILED`), el error de publicación y permite reintentar. |
-| `/settings` | OK | Datos de la sesión, cierre de sesión y desconexión de perfiles. |
-| `/smartlink` | WIP | Constructor de página "link in bio". Solo estado en cliente (sin persistencia). |
+| `/settings` | OK | Sólo `ADMIN`: datos de la sesión, cierre de sesión y desconexión de perfiles. |
+| `/smartlink` | WIP | Sólo `ADMIN`: constructor de página "link in bio". Solo estado en cliente (sin persistencia). |
 | `/inbox` | OK | Bandeja unificada de **comentarios y mensajes directos** de las Páginas de Facebook y cuentas de Instagram conectadas. Ver [Inbox](#inbox-comentarios-y-mensajes-directos). |
+
+## Permisos por rol
+
+| Rol | Pantallas |
+| --- | --- |
+| `ADMIN` | Overview, Reels, Planning, Inbox, SmartLink, Connections, Settings y Admin. |
+| `CLIENT` | Overview, Reels, Planning e Inbox, limitado a las redes que se le asignaron. |
+
+Las pantallas que tocan la configuración de la cuenta o de las redes (SmartLink, Connections, Settings y Admin) quedan fuera del alcance del cliente para que no pueda desconectar perfiles, reimportar cuentas ni cambiar credenciales por error.
+
+- **Menú**: `src/components/Sidebar.tsx` arma los ítems base (Analytics, Reels, Planning, Inbox) y concatena los de administración sólo si `session.user.role === "ADMIN"`.
+- **URL directa**: `src/proxy.ts` define `ADMIN_ONLY_PATHS = ["/admin", "/smartlink", "/connections", "/settings"]`; con sesión válida y rol distinto de `ADMIN` redirige a `/` (el guard de sesión previo se mantiene: sin token va a `/login?callbackUrl=...`).
+- **API**: `/api/admin/*` y los endpoints que crean o modifican conexiones (`/api/facebook/pages`, `/api/facebook/save-pages`, `/api/instagram/accounts`, `/api/instagram/save-accounts`) usan `requireAdmin()` y responden `403`; `/api/connect/facebook/start` redirige a `/` porque es una navegación del navegador.
 
 ## Stack
 
@@ -431,7 +444,7 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
 5. Verificación mínima:
    - `GET /api/auth/providers` devuelve **sólo** `credentials`.
    - `/login` responde 200 y `/connections` sin sesión redirige a `/login?callbackUrl=...`.
-   - Login con `ADMIN_EMAIL` -> `/admin` -> *Conectar mi Facebook* -> *Crear cuenta* eligiendo redes -> el cliente sólo ve esas redes en `/connections`, `/planning` e `/inbox`, y puede publicar.
+   - Login con `ADMIN_EMAIL` -> `/admin` -> *Conectar mi Facebook* -> *Crear cuenta* eligiendo redes -> el cliente sólo ve esas redes en Overview, `/planning` e `/inbox`, y puede publicar.
 
 ### Alta de un cliente nuevo (checklist)
 
@@ -440,7 +453,7 @@ Programala cada minuto (o cada 5). La respuesta JSON informa `published`, `retri
 3. En `/admin` -> *Crear cuenta*: nombre, email, contraseña y **seleccionar las redes del pool**. Quedan asignadas al usuario creado sin duplicar perfiles: todo se publica con el token del ADMIN.
 4. Si el cliente tiene más de un usuario, ajustar los permisos con *Asignar redes* en cada usuario (el ADMIN siempre ve todo el pool).
 5. Si la cuenta va a usar el **Inbox**: configurar el webhook en la app de Meta (ver [Configurar el webhook en Meta](#configurar-el-webhook-en-meta-una-vez-por-app-de-cliente)) después de vincular las Páginas.
-6. Enviar al cliente la URL de login y sus credenciales. La app del ADMIN debe estar en modo *Development* con el ADMIN como Tester, o publicada (ver *Pasar la app de un cliente a producción*).
+6. Enviar al cliente la URL de login y sus credenciales. El cliente sólo ve Overview, Reels, Planning e Inbox: SmartLink, Connections, Settings y Admin quedan ocultos en el menú y bloqueados por URL (ver [Permisos por rol](#permisos-por-rol)). La app del ADMIN debe estar en modo *Development* con el ADMIN como Tester, o publicada (ver *Pasar la app de un cliente a producción*).
 
 ## Problemas conocidos y soluciones
 

@@ -296,7 +296,7 @@ function NewPostForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
         {!loadingProfiles && profiles.length === 0 && (
           <div style={{ fontSize: '0.8125rem', color: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
-            No hay perfiles conectados todavía. Andá a <a href="/connections" style={{ color: 'inherit', fontWeight: 600 }}>Conexiones</a> e importá una Página de Facebook o una cuenta de Instagram.
+            No hay redes asignadas todavía. Las cuentas se administran desde el panel de administración; si necesitás publicar en una red, pedile al administrador que te la asigne.
           </div>
         )}
 

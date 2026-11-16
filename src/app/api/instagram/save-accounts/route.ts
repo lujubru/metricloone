@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { accessibleProfileWhere, badRequest, requireTenant, serverError } from "@/lib/api";
+import { accessibleProfileWhere, badRequest, requireAdmin, serverError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { FacebookApiError } from "@/lib/facebook";
 import { INSTAGRAM_PLATFORM, listInstagramAccounts } from "@/lib/instagram";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const auth = await requireTenant();
+    const auth = await requireAdmin();
     if ("response" in auth) return auth.response;
 
     const body = await req.json();

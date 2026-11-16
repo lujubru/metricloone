@@ -9,15 +9,21 @@ export default function Sidebar() {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
 
+  // SmartLink, Connections y Settings tocan la configuración de la cuenta y de
+  // las redes vinculadas: quedan reservados al ADMIN.
+  const adminItems = [
+    { name: 'SmartLink', path: '/smartlink', icon: <LinkIcon size={20} /> },
+    { name: 'Connections', path: '/connections', icon: <Share2 size={20} /> },
+    { name: 'Settings', path: '/settings', icon: <Settings size={20} /> },
+    { name: 'Admin', path: '/admin', icon: <ShieldCheck size={20} /> },
+  ];
+
   const navItems = [
     { name: 'Analytics', path: '/', icon: <BarChart3 size={20} /> },
     { name: 'Reels', path: '/reels', icon: <Video size={20} /> },
     { name: 'Planning', path: '/planning', icon: <CalendarDays size={20} /> },
     { name: 'Inbox', path: '/inbox', icon: <Inbox size={20} /> },
-    { name: 'SmartLink', path: '/smartlink', icon: <LinkIcon size={20} /> },
-    { name: 'Connections', path: '/connections', icon: <Share2 size={20} /> },
-    { name: 'Settings', path: '/settings', icon: <Settings size={20} /> },
-    ...(isAdmin ? [{ name: 'Admin', path: '/admin', icon: <ShieldCheck size={20} /> }] : []),
+    ...(isAdmin ? adminItems : []),
   ];
 
   return (
