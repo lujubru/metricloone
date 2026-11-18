@@ -118,6 +118,8 @@ Abre `http://localhost:3000`, entrá con el usuario administrador y creá las cu
 | `SCHEDULER_ENABLED` | No | `false` desactiva el scheduler interno; `true` lo fuerza en desarrollo. |
 | `PUBLISH_INTERVAL_SECONDS` | No | Intervalo del scheduler interno en segundos (default `60`, mínimo `15`). |
 | `FACEBOOK_GRAPH_VERSION` | No | Versión de la Graph API (default `v23.0`). |
+| `FACEBOOK_GRAPH_TIMEOUT_MS` | No | Tope por llamada a la Graph API en milisegundos (default `60000`, mínimo `5000`). Evita que un `fetch` colgado frene el scheduler. |
+| `PRISMA_LOG_QUERIES` | No | `true` vuelve a loguear todas las queries de Prisma en producción (`prisma:query …`). Por defecto quedan apagadas para no saturar el visor de logs de Coolify. |
 | `META_WEBHOOK_VERIFY_TOKEN` | Si (Inbox) | Cadena aleatoria que se pega como *Verify token* al configurar el webhook en cada app de Meta. Sin ella `/api/webhooks/meta` responde 500 en la verificación. |
 | `LEGAL_CONTACT_EMAIL` | No | Email de contacto que muestran `/privacy` y `/data-deletion` (default `soporte@pixeldesarrollo.com`). |
 | `NEXT_PUBLIC_APP_NAME` | No | Nombre visible en las páginas legales (default `Metricool Clone`). |
@@ -210,7 +212,7 @@ Las migraciones están en `prisma/migrations/` y se aplican con `prisma migrate 
 | `/api/media/[id]/[filename]` | GET/HEAD | Sirve el archivo almacenado en la base (público, con `Cache-Control` inmutable). La extensión es obligatoria. Con `?ig=feed` devuelve la imagen recortada a 4:5 – 1.91:1 para el feed de Instagram (ver [Relación de aspecto](#relación-de-aspecto-recorte-para-el-feed)). |
 | `/api/posts/[id]/publish` | POST | Publica el post inmediatamente en la red del perfil (Página de Facebook o cuenta de Instagram). |
 | `/api/cron/publish` | GET/POST | Publica los posts vencidos. Requiere `Authorization: Bearer $CRON_SECRET`. |
-
+| `/api/health/scheduler` | GET | Estado del scheduler interno: `intervalMs`, `lastTickAgoMs`, `lastResult`, `watchdogRuns` y `stalled`. Responde **503** cuando está frenado. Se autentica con el secreto de cron o con sesión de ADMIN. |
 | `/api/inbox` | GET | Lista los hilos del tenant con el último mensaje, el conteo de no leídos y los filtros `platform`, `kind` y `unreadOnly`. |
 | `/api/inbox/[id]` | GET/PATCH/DELETE | Detalle del hilo con todos sus mensajes; `PATCH { isRead }` lo marca leído; `DELETE` borra el hilo local (no toca Meta). |
 | `/api/inbox/[id]/reply` | POST | Responde al hilo: mensaje directo si es `MESSAGE`, respuesta al comentario si es `COMMENT`. Persiste el `OUTBOUND` en la misma transacción. |
@@ -248,6 +250,23 @@ Existen dos disparadores, y puedes usar uno, otro o ambos:
 2. **Cron externo**: `curl -X POST -H "Authorization: ******" https://<tu-dominio>/api/cron/publish`.
 
 Los posts que queden en `PUBLISHING` más de 10 minutos (por un reinicio a mitad de publicación) se devuelven a `SCHEDULED` automáticamente.
+
+### Vigilancia del scheduler
+
+El scheduler interno corre dentro del proceso de Next, así que se puede quedar callado sin que el contenedor se caiga (event loop bloqueado, `fetch` colgado esperando a Meta, reinicio a mitad de un tick). Cuando eso pasa el reel nunca se publica solo y sólo aparece si alguien lo fuerza a mano. Para evitarlo hay tres piezas:
+
+- **Watchdog** (`src/instrumentation.ts`): cada `max(10s, min(intervalo, 60s))` revisa el estado. Si pasó más de **dos intervalos** sin que termine un tick, dispara uno; si un tick lleva más de **10 minutos** colgado, suelta el cerrojo (es seguro: los posts se toman con un `updateMany` atómico).
+- **Latido en el log**: cada 10 ticks se escribe `[scheduler] latido: …`. Si ese log se corta, el scheduler está frenado.
+- **`GET /api/health/scheduler`**: devuelve `intervalMs`, `lastTickFinishedAt`, `lastTickAgoMs`, `lastResult`, `watchdogRuns` y `stalled`. Responde **503** cuando `stalled` es `true`. Se autentica con el secreto de cron (`Authorization: Bearer`, `x-cron-secret` o `?secret=`) o con sesión de ADMIN. Conviene apuntarle un monitor externo (UptimeRobot, healthcheck de Coolify) para que avise.
+
+En producción **recomendado**: además del scheduler interno, configurar el cron externo cada minuto en Coolify con `CRON_SECRET`. Los dos pueden convivir sin duplicar publicaciones porque la toma del post es atómica, y si el proceso interno se traba el cron externo publica igual.
+
+```bash
+# healthcheck manual
+curl -H "Authorization: Bearer $CRON_SECRET" https://<tu-dominio>/api/health/scheduler
+```
+
+Los videos de Instagram tardan **hasta ~5 minutos** en procesarse (`waitForContainer` en `src/lib/instagram.ts`), así que el post pasa varios minutos en `PUBLISHING` antes de quedar `PUBLISHED`. En `/planning` ese estado se muestra con spinner y la lista se refresca cada 10 segundos mientras hay algo publicándose o por salir; no hace falta forzar la publicación.
 
 #### Relación de aspecto (recorte para el feed)
 
@@ -503,7 +522,7 @@ Cosas que no son obvias y conviene recordar antes de tocar el código:
 - **Regla `react-hooks/set-state-in-effect`** (error en Next 16): detecta `setState` de forma transitiva a través de funciones llamadas desde el cuerpo del `useEffect`. Patrones usados para evitarla: derivar estado en render en lugar de sincronizarlo, y diferir el fetch inicial con `queueMicrotask(...)` (ver `src/app/admin/page.tsx`).
 - **`User` no tiene `createdAt`**: cualquier `orderBy`/`select` sobre `User` debe usar `name`; usar `createdAt` rompe los tipos de Prisma con un error confuso.
 - **El `tenantId` sale siempre del JWT**, nunca del body; `/api/facebook/save-pages` y `/api/instagram/save-accounts` revalidan contra la Graph API antes de guardar.
-- El scheduler interno (`src/instrumentation.ts`) publica para **todos** los tenants; se apaga con `SCHEDULER_ENABLED=false` y no corre durante el build.
+- El scheduler interno (`src/instrumentation.ts`) publica para **todos** los tenants; se apaga con `SCHEDULER_ENABLED=false` y no corre durante el build. Tiene un watchdog que relanza el tick si pasó más de dos intervalos sin correr; el estado se expone en `/api/health/scheduler` (`src/lib/scheduler-status.ts`).
 - **Los medios tienen dos variantes**: el original (`/api/media/<id>/<filename>`, `immutable`) y la de feed (`?ig=feed`, `max-age=604800`) que devuelve el recorte para Instagram. Si tocás `instagramFeedCrop` o `fitImageForInstagramFeed`, purgá Cloudflare o cambiá el valor del parámetro: las variantes viejas quedan cacheadas y Meta seguiría recibiendo el recorte anterior.
 - **`sharp` sólo se importa en el servidor** (`src/lib/image-processing.ts`, la ruta de subida y la de medios). `src/lib/media.ts` es compartido con componentes cliente, así que ahí sólo viven constantes y la matemática del recorte.
 

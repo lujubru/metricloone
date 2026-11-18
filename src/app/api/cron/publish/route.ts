@@ -1,30 +1,19 @@
 import { NextResponse } from "next/server";
+import { cronSecretConfigured, isCronAuthorized } from "@/lib/cron-auth";
 import { publishDuePosts } from "@/lib/publisher";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorized(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-
-  const header = req.headers.get("authorization") || "";
-  const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  const custom = req.headers.get("x-cron-secret") || "";
-  const query = new URL(req.url).searchParams.get("secret") || "";
-
-  return bearer === secret || custom === secret || query === secret;
-}
-
 async function handle(req: Request) {
-  if (!process.env.CRON_SECRET) {
+  if (!cronSecretConfigured()) {
     return NextResponse.json(
       { error: "CRON_SECRET no está configurado en el servidor" },
       { status: 503 }
     );
   }
 
-  if (!isAuthorized(req)) {
+  if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 

@@ -153,6 +153,24 @@ function viewLabel(view: ViewMode, cursor: Date) {
   return cursor.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+/** Un reel puede tardar minutos en procesarse en Instagram. */
+const FAST_REFRESH_MS = 10_000;
+const SLOW_REFRESH_MS = 60_000;
+const DUE_SOON_MS = 60_000;
+const OVERDUE_GRACE_MS = 90_000;
+
+function isPublishingOrDueSoon(post: Post, now = Date.now()) {
+  if (post.status === 'PUBLISHING') return true;
+  if (post.status !== 'SCHEDULED') return false;
+
+  const due = new Date(post.scheduledFor).getTime();
+  return due - now <= DUE_SOON_MS && due >= now - 15 * 60_000;
+}
+
+function isOverduePost(post: Post, now = Date.now()) {
+  return post.status === 'SCHEDULED' && new Date(post.scheduledFor).getTime() < now - OVERDUE_GRACE_MS;
+}
+
 export default function Planning() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,16 +206,20 @@ export default function Planning() {
     };
   }, [refreshKey]);
 
+  const needsFastRefresh = posts.some((post) => isPublishingOrDueSoon(post));
+
   useEffect(() => {
     const refresh = () => setRefreshKey((k) => k + 1);
     window.addEventListener('posts-updated', refresh);
     // Refresca para reflejar lo que publique el scheduler en segundo plano.
-    const interval = setInterval(refresh, 60000);
+    // Si hay algo publicándose (o por salir) vamos más rápido: un reel puede
+    // tardar varios minutos en procesarse y sin esto parecía que no publicaba.
+    const interval = setInterval(refresh, needsFastRefresh ? FAST_REFRESH_MS : SLOW_REFRESH_MS);
     return () => {
       window.removeEventListener('posts-updated', refresh);
       clearInterval(interval);
     };
-  }, []);
+  }, [needsFastRefresh]);
 
   useEffect(() => {
     if (!isFilterOpen) return;
@@ -547,6 +569,7 @@ export default function Planning() {
                       <span>Publicado el {formatDate(p.publishedAt)}</span>
                     )}
                   </div>
+                  <PublishProgressNote post={p} />
                   {p.errorMessage && (
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.78rem', color: '#ef4444' }}>
                       <AlertCircle size={14} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
@@ -760,6 +783,7 @@ function DayAgenda({ posts }: { posts: Post[] }) {
               <TypeBadge post={p} />
               <StatusBadge status={p.status} />
             </div>
+            <PublishProgressNote post={p} />
             {p.errorMessage && (
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.35rem', marginTop: '0.35rem', fontSize: '0.75rem', color: '#ef4444' }}>
                 <AlertCircle size={13} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
@@ -842,20 +866,50 @@ function MediaThumbnails({ urls }: { urls: string[] }) {
   );
 }
 
+function PublishProgressNote({ post }: { post: Post }) {
+  if (post.status === 'PUBLISHING') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.78rem', color: '#f59e0b' }}>
+        <Loader2 size={13} style={{ animation: 'spin 2s linear infinite', flexShrink: 0 }} />
+        <span>Publicando en la red social… los videos pueden tardar unos minutos.</span>
+      </div>
+    );
+  }
+
+  if (isOverduePost(post)) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.78rem', color: '#f59e0b' }}>
+        <Clock size={13} style={{ flexShrink: 0 }} />
+        <span>Esperando al publicador automático (se ejecuta cada minuto).</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const key = (status || '').toUpperCase();
   const color = STATUS_COLORS[key] || 'var(--text-secondary)';
+  const isPublishing = key === 'PUBLISHING';
 
   return (
-    <span style={{
-      color,
-      backgroundColor: `${color}1f`,
-      border: `1px solid ${color}55`,
-      borderRadius: '999px',
-      padding: '0.05rem 0.5rem',
-      fontSize: '0.7rem',
-      fontWeight: 600,
-    }}>
+    <span
+      title={isPublishing ? 'La red social está procesando el archivo: puede tardar unos minutos' : undefined}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.3rem',
+        color,
+        backgroundColor: `${color}1f`,
+        border: `1px solid ${color}55`,
+        borderRadius: '999px',
+        padding: '0.05rem 0.5rem',
+        fontSize: '0.7rem',
+        fontWeight: 600,
+      }}
+    >
+      {isPublishing && <Loader2 size={11} style={{ animation: 'spin 2s linear infinite' }} />}
       {STATUS_LABELS[key] || status}
     </span>
   );

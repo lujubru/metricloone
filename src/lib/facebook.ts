@@ -3,6 +3,14 @@ import { POST_TYPE_STORY, isVideoUrl } from "./media";
 const GRAPH_VERSION = process.env.FACEBOOK_GRAPH_VERSION || "v23.0";
 export const GRAPH_BASE_URL = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
+/** Tope para cada llamada a la Graph API: sin él un fetch colgado traba el tick entero. */
+const DEFAULT_GRAPH_TIMEOUT_MS = 60_000;
+
+function graphTimeoutMs() {
+  const configured = Number(process.env.FACEBOOK_GRAPH_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 5_000 ? configured : DEFAULT_GRAPH_TIMEOUT_MS;
+}
+
 type GraphError = {
   message: string;
   type?: string;
@@ -58,6 +66,7 @@ export class FacebookApiError extends Error {
 
 export async function graphRequest<T>(path: string, body?: Record<string, string>): Promise<T> {
   let res: Response;
+  const timeoutMs = graphTimeoutMs();
 
   try {
     res = await fetch(`${GRAPH_BASE_URL}${path}`, {
@@ -65,8 +74,15 @@ export async function graphRequest<T>(path: string, body?: Record<string, string
       headers: body ? { "Content-Type": "application/x-www-form-urlencoded" } : undefined,
       body: body ? new URLSearchParams(body).toString() : undefined,
       cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new FacebookApiError(
+        `La API de Facebook no respondió en ${Math.round(timeoutMs / 1000)}s`,
+        504
+      );
+    }
     const message = error instanceof Error ? error.message : "Error de red";
     throw new FacebookApiError(`No se pudo contactar la API de Facebook: ${message}`, 503);
   }
@@ -99,7 +115,10 @@ async function graphListAll<T>(path: string): Promise<T[]> {
   let hops = 0;
 
   while (next && hops < 25) {
-    const res: Response = await fetch(next, { cache: "no-store" });
+    const res: Response = await fetch(next, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(graphTimeoutMs()),
+    });
     const data = (await res.json()) as {
       data?: T[];
       paging?: { next?: string };
